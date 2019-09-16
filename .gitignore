@@ -1,0 +1,5 @@
+# ignore compiled python files
+*.pyc
+
+# ignore any swap files that may have been generated
+*~
