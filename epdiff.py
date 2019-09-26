@@ -37,9 +37,8 @@ def initializeFFTW(sh):
     inp = pyfftw.empty_aligned(sh, dtype=np.float64)
     outp_sh = sh[:-1] + (sh[-1]//2+1,) 
     outp = pyfftw.empty_aligned(outp_sh, dtype=np.complex128)
-    ffter = pyfftw.FFTW(inp, outp, axes=ax, threads=4)
-    iffter = pyfftw.FFTW(outp, inp, axes=ax, direction='FFTW_BACKWARD', threads=4)
-    pyfftw.interfaces.cache.enable()
+    ffter = pyfftw.FFTW(inp, outp, axes=ax, threads=1)
+    iffter = pyfftw.FFTW(outp, inp, axes=ax, direction='FFTW_BACKWARD', threads=1)
 
 
 def initialize_metric_kernel(a, b, c, d, vox, sh):
