@@ -23,6 +23,7 @@ import epdiff
 import time
 import scipy.ndimage as ndi
 from interface import parser
+import os
 from os.path import splitext, abspath
 
 
@@ -179,6 +180,7 @@ def compute_residual(phi_given, phi_estimated):
 
     residual = phi_given - phi_estimated
     energy = np.sum(residual * residual)
+    # TODO: use sum + sqrt below, since already squared everything; faster
     max_residual = np.linalg.norm(residual, axis=-1).max()
     residual *= 1./max_residual
     return residual, energy, max_residual
@@ -259,6 +261,7 @@ print('total optimization time: ' + str(time.clock() - start_time))
 
 # save all outputs
 pad = 10    # TODO: magic number here, need better system for padding
+os.makedirs(abspath(args.output_directory), exist_ok=True)
 
 phi_out = np.zeros(params.grid)
 phi_out[slices[0], slices[1], slices[2]] = phi[pad:-pad, pad:-pad, pad:-pad]
@@ -271,3 +274,4 @@ write_field(phiinv_out, args.output_directory+'/reconPhiinv', args.transform)
 v_out = np.zeros(params.grid)
 v_out[slices[0], slices[1], slices[2]] = fields.v[0][pad:-pad, pad:-pad, pad:-pad]
 write_field(v_out, args.output_directory+'/reconV0', args.transform)
+
