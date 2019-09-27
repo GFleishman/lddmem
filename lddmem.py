@@ -223,6 +223,7 @@ def write_field(field, path, transform):
 
 # initialize containers, counters, and flags
 args = parser.parse_args()
+os.makedirs(abspath(args.output_directory), exist_ok=True)
 params, slices, meta = initialize_parameters(args)
 fields = fields_container()
 level = len(params.iterations) - 1
@@ -274,8 +275,6 @@ print(message, file=params.log)
 
 # save all outputs
 pad = 10    # TODO: magic number here, need better system for padding
-os.makedirs(abspath(args.output_directory), exist_ok=True)
-
 phi_out = np.zeros(params.grid)
 phi_out[slices[0], slices[1], slices[2]] = phi[pad:-pad, pad:-pad, pad:-pad]
 write_field(phi_out, args.output_directory+'/reconPhi', args.transform)
