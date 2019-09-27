@@ -39,7 +39,6 @@ OUTPUTS
     reconPhiinv: reconstructed transform in LDDMM space
     reconPhi: inverse of reconstructed transform (you get this for free!)
     recon.log: log of parameter values and optimization results
-    ^^ NOT IMPLEMENTED YET; CURRENTLY ALL TEXT OUTPUT PRINTED TO STDOUT
 """
 
 # ARGUMENTS

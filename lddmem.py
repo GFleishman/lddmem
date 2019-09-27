@@ -52,6 +52,8 @@ class constants_container:
         self.spacing = spacing
     def set_grid(self, grid):
         self.grid = grid
+    def set_log(self, log):
+        self.log = log
 
 
 class fields_container:
@@ -125,6 +127,7 @@ def initialize_parameters(args):
     params.set_time_steps(int(args.time_steps))
     params.set_abcd([float(x) for x in args.regularizer.split('x')])
     params.set_sigma(float(args.regularizer_balance))
+    params.set_log(open(args.output_directory+'/recon.log', 'w'))
     phi, spacing, meta = read_image(args.transform)
     params.set_grid(phi.shape)
     params.set_spacing(spacing)
@@ -225,6 +228,10 @@ fields = fields_container()
 level = len(params.iterations) - 1
 compute_phi = False
 
+# record the arguments
+print(args)
+print(args, file=params.log)
+
 # multiscale loop
 start_time = time.clock()
 for local_iterations in params.iterations:
@@ -245,19 +252,25 @@ for local_iterations in params.iterations:
         if energy > params.tolerance * lowest_energy:
             energy, fields.v[0] = lowest_energy, lowest_v0
             local_step *= 0.5
-        else:
+        elif not compute_phi:
             if energy < lowest_energy:
                 lowest_energy, lowest_v0 = energy, np.copy(fields.v[0])
             _v = backward_integration(params, fields, residual)
             # the gradient descent update
             fields.v[0] = fields.v[0] - (local_step * (fields.v[0] + (1./params.sigma**2) * _v))
 
-        print('iteration ' + str(iteration) + ', energy: ' + str(energy) + \
-              ', max error: ' + str(max_residual) + ', time: ' + str(time.clock() - t0))
+        # record progress
+        message = 'iteration ' + str(iteration) + ', energy: ' + str(energy) + \
+                  ', max error: ' + str(max_residual) + ', time: ' + str(time.clock() - t0)
+        print(message)
+        print(message, file=params.log)
+             
         iteration += 1
     level -= 1
-print('total optimization time: ' + str(time.clock() - start_time))
 
+message = 'total optimization time: ' + str(time.clock() - start_time)
+print(message)
+print(message, file=params.log)
 
 # save all outputs
 pad = 10    # TODO: magic number here, need better system for padding
