@@ -155,7 +155,7 @@ def initialize_scale_level(params, v, level):
     epdiff.initializeFFTW(shape[:-1])
     fields.set_spacing(params.spacing * 2**level)
     fields.set_position(epdiff.position_array(shape[:-1], fields.spacing))
-    L, K = epdiff.initialize_metric_kernel(params.a, params.b,
+    L, K = epdiff.initialize_metric_kernel(params.a * 2**level, params.b,
                                            params.c, params.d,
                                            fields.spacing, shape[:-1])
     fields.set_metric(L)
@@ -274,6 +274,7 @@ print(message)
 print(message, file=params.log)
 
 # save all outputs
+# TODO: this assumes a mask was given
 pad = 10    # TODO: magic number here, need better system for padding
 phi_out = np.zeros(params.grid)
 phi_out[slices[0], slices[1], slices[2]] = phi[pad:-pad, pad:-pad, pad:-pad]
