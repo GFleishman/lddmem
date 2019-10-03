@@ -56,9 +56,9 @@ def initialize_metric_kernel(a, b, c, d, vox, sh):
 
     # compute the scalar (or diagonal) term(s) of kernel
     for i in range(dim):
-        q = np.fft.fftfreq(sh[i], d=vox[i])
-        X = 1 - np.cos(q*2.0*np.pi*vox[i])
-        X *= 2*a/vox[i]**2
+        q = np.fft.fftfreq(sh[i])
+        X = 1 - np.cos(q*2.0*np.pi)
+        X *= 2*a/vox[i]
         X = np.reshape(X, sha[i])*oa
         if b == 0.0:
             L += X
@@ -119,35 +119,35 @@ def ifft(F, sh):
     return f
 
 
-def jacobian(v):
+def jacobian(v, vox):
     """Return Jacobian field of vector field v"""
 
     sh, d = v.shape[:-1], v.shape[-1]
     jac = np.empty(sh + (d, d))
     for i in range(d):
-        jac[..., i, :] = np.moveaxis(np.array(np.gradient(v[..., i])), 0, -1)
+        jac[..., i, :] = np.moveaxis(np.array(np.gradient(v[..., i], vox[i])), 0, -1)
     return jac
 
 
-def divergence(v, Dv=None):
+def divergence(v, vox, Dv=None):
     """Return the divergence of vector field v"""
 
     if Dv is None:
         partials = np.empty_like(v)
         for i in range(v.shape[-1]):
-            partials[..., i] = np.gradient(v[..., i], axis=i)
+            partials[..., i] = np.gradient(v[..., i], vox[i], axis=i)
         return np.sum(partials, axis=-1)
     else:
         return np.sum(np.diagonal(Dv, axis1=-2, axis2=-1), axis=-1)
 
 
-def adTranspose(v, m, K, Dv=None, Dm=None):
+def adTranspose(v, m, K, vox, Dv=None, Dm=None):
     """Evaluate the transpose of the negative Jacobi-Lie bracket"""
 
     global ffter, iffter
-    if Dv is None: Dv = jacobian(v)
-    if Dm is None: Dm = jacobian(m)
-    divv = divergence(v, Dv=Dv)
+    if Dv is None: Dv = jacobian(v, vox)
+    if Dm is None: Dm = jacobian(m, vox)
+    divv = divergence(v, vox, Dv=Dv)
     permutation = list(range(len(Dv.shape)))
     permutation.append(permutation.pop(-2))
     DvT = np.transpose(Dv, permutation)
@@ -157,11 +157,11 @@ def adTranspose(v, m, K, Dv=None, Dm=None):
     return - ifft(K * fft(adT), v.shape)
 
 
-def ad(v, m, Dv=None, Dm=None):
+def ad(v, m, vox, Dv=None, Dm=None):
     """Evaluate the negative Jacobi-Lie bracket"""
     
-    if Dv is None: Dv = jacobian(v)
-    if Dm is None: Dm = jacobian(m)
+    if Dv is None: Dv = jacobian(v, vox)
+    if Dm is None: Dm = jacobian(m, vox)
     ad = np.einsum('...ij,...j->...i', Dv, m)
     return ad - np.einsum('...ij,...j->...i', Dm, v)
 

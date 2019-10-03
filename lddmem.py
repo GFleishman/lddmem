@@ -171,9 +171,9 @@ def forward_integration(params, fields, compute_phi):
     for i in range(params.time_steps-1):
         if compute_phi:
             phi += params.dt * epdiff.apply_transform(v[i], fields.spacing, X+phi)
-        phiinv -= params.dt * np.einsum('...ij,...j->...i', epdiff.jacobian(X+phiinv), v[i])
+        phiinv -= params.dt * np.einsum('...ij,...j->...i', epdiff.jacobian(X+phiinv, fields.spacing), v[i])
         m = epdiff.ifft(fields.L * epdiff.fft(v[i]), v[i].shape)
-        dvdt = epdiff.adTranspose(v[i], m, fields.K)
+        dvdt = epdiff.adTranspose(v[i], m, fields.K, fields.spacing)
         v[i+1] = v[i] + params.dt * dvdt
     return phiinv, phi
 
@@ -182,11 +182,12 @@ def compute_residual(phi_given, phi_estimated):
     """Compute residual (SSD)"""
 
     residual = phi_given - phi_estimated
-    energy = np.sum(residual * residual)
-    # TODO: use sum + sqrt below, since already squared everything; faster
-    max_residual = np.linalg.norm(residual, axis=-1).max()
+    energy = residual * residual
+    residual_magnitudes = np.sqrt(np.sum(energy, axis=-1))
+    max_residual = residual_magnitudes.max()
+    mean_residual = np.mean(residual_magnitudes)
     residual *= 1./max_residual
-    return residual, energy, max_residual
+    return residual, np.sum(energy), max_residual, mean_residual
 
 
 def backward_integration(params, fields, residual):
@@ -195,11 +196,11 @@ def backward_integration(params, fields, residual):
     v, K = fields.v, fields.K
     _v, _i = np.zeros_like(residual), residual
     for i in range(1, params.time_steps)[::-1]:
-        Dv, D_v = epdiff.jacobian(v[i]), epdiff.jacobian(_v)
-        _v += params.dt * (_i - epdiff.ad(v[i], _v, Dv=Dv, Dm=D_v) + \
-                          epdiff.adTranspose(_v, v[i], K, Dv=D_v, Dm=Dv))
-        _i += params.dt * epdiff.adTranspose(v[i], _i, K, Dv=Dv)
-    _v = epdiff.ifft(K * epdiff.fft(_v), _v.shape)
+        Dv, D_v = epdiff.jacobian(v[i], fields.spacing), epdiff.jacobian(_v, fields.spacing)
+        _v += params.dt * (_i - epdiff.ad(v[i], _v, fields.spacing, Dv=Dv, Dm=D_v) + \
+                          epdiff.adTranspose(_v, v[i], K, fields.spacing, Dv=D_v, Dm=Dv))
+        _i += params.dt * epdiff.adTranspose(v[i], _i, K, fields.spacing, Dv=Dv)
+#    _v = epdiff.ifft(K * epdiff.fft(_v), _v.shape)
     return _v
 
 
@@ -249,20 +250,22 @@ for local_iterations in params.iterations:
         if level == 0 and iteration == local_iterations - 1:
             compute_phi = True
         phiinv, phi = forward_integration(params, fields, compute_phi)
-        residual, energy, max_residual = compute_residual(fields.phi, phiinv)
+        residual, energy, max_residual, mean_residual = compute_residual(fields.phi, phiinv)
         if energy > params.tolerance * lowest_energy:
             energy, fields.v[0] = lowest_energy, lowest_v0
             local_step *= 0.5
+            iteration -= 1
         elif not compute_phi:
             if energy < lowest_energy:
                 lowest_energy, lowest_v0 = energy, np.copy(fields.v[0])
             _v = backward_integration(params, fields, residual)
-            # the gradient descent update
-            fields.v[0] = fields.v[0] - (local_step * (fields.v[0] + (1./params.sigma**2) * _v))
+        # the gradient descent update
+        fields.v[0] = fields.v[0] - (local_step * (fields.v[0] + (1./params.sigma**2) * _v))
 
         # record progress
-        message = 'iteration ' + str(iteration) + ', energy: ' + str(energy) + \
-                  ', max error: ' + str(max_residual) + ', time: ' + str(time.clock() - t0)
+        message = 'it: ' + str(iteration) + ', en: ' + str(energy) + \
+                  ', max err: ' + str(max_residual) + ', mean err: ' + str(mean_residual) + \
+                  ', time: ' + str(time.clock() - t0)
         print(message)
         print(message, file=params.log)
              
