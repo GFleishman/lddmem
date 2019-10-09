@@ -107,13 +107,15 @@ def get_crop_region(mask):
     return slices
 
 
-def crop(img, slices, pad=10):
+def crop(img, slices, extend=10, pad=5):
     """Crop and pad an image using slices from get_crop_region()"""
 
+    R = lambda x: 0 if x < 0 else x
+    slices = [slice(R(s.start-extend), s.stop+extend) for s in slices]
     cropped = img[slices[0], slices[1], slices[2]]
     pad = [(pad, pad)]*3
     if len(cropped.shape) == 4: pad += [(0, 0)]
-    return np.pad(cropped, pad, mode='constant')
+    return np.pad(cropped, pad, mode='constant'), slices
 
 
 def initialize_parameters(args):
@@ -134,7 +136,7 @@ def initialize_parameters(args):
     if args.mask:
         mask, _not_used_, meta = read_image(args.mask)
         slices = get_crop_region(mask)
-        phi = crop(phi, slices)
+        phi, slices = crop(phi, slices)
     params.set_phi(phi)
     return params, slices, meta
 
@@ -144,18 +146,28 @@ def initialize_scale_level(params, v, level):
     initialize other objects for scale level"""
 
     fields = fields_container()
-    phi = [ndi.zoom(params.phi[..., i], 1./2**level) for i in range(3)]
-    fields.set_phi(np.moveaxis(np.array(phi), 0, -1))
+
+    # anti-aliasing required before downsampling
+    phi_smooth = params.phi
+    if level != 0:
+        epdiff.initializeFFTW(params.phi.shape[:-1])
+        aaL, aaK = epdiff.initialize_metric_kernel(2**level, 0, 1, 2,
+                                                   params.spacing,
+                                                   params.phi.shape[:-1])
+        phi_smooth = epdiff.ifft( aaK * epdiff.fft(params.phi), params.phi.shape )
+
+    phi = [ndi.zoom(phi_smooth[..., i], 1./2**level, mode='wrap') for i in range(3)]
+    fields.set_phi(np.ascontiguousarray(np.moveaxis(np.array(phi), 0, -1)))
     shape = fields.phi.shape
     fields.set_velocity(np.zeros((params.time_steps,) + shape))
     if v is not None:
         zoom_factor = np.array(shape[:-1]) / np.array(v[0].shape[:-1])
-        v_ = [ndi.zoom(v[0, ..., i], zoom_factor) for i in range(3)]
-        fields.v[0] = np.moveaxis(np.array(v_), 0, -1)
+        v_ = [ndi.zoom(v[0, ..., i], zoom_factor, mode='nearest') for i in range(3)]
+        fields.v[0] = np.ascontiguousarray(np.moveaxis(np.array(v_), 0, -1))
     epdiff.initializeFFTW(shape[:-1])
     fields.set_spacing(params.spacing * 2**level)
     fields.set_position(epdiff.position_array(shape[:-1], fields.spacing))
-    L, K = epdiff.initialize_metric_kernel(params.a * 2**level, params.b,
+    L, K = epdiff.initialize_metric_kernel(params.a, params.b,
                                            params.c, params.d,
                                            fields.spacing, shape[:-1])
     fields.set_metric(L)
@@ -200,7 +212,7 @@ def backward_integration(params, fields, residual):
         _v += params.dt * (_i - epdiff.ad(v[i], _v, fields.spacing, Dv=Dv, Dm=D_v) + \
                           epdiff.adTranspose(_v, v[i], K, fields.spacing, Dv=D_v, Dm=Dv))
         _i += params.dt * epdiff.adTranspose(v[i], _i, K, fields.spacing, Dv=Dv)
-#    _v = epdiff.ifft(K * epdiff.fft(_v), _v.shape)
+    _v = epdiff.ifft(K * epdiff.fft(_v), _v.shape)
     return _v
 
 
@@ -233,6 +245,12 @@ compute_phi = False
 # record the arguments
 print(args)
 print(args, file=params.log)
+
+# record initial energy
+energy = np.sum(params.phi**2)
+message = 'initial energy: ' + str(energy)
+print(message)
+print(message, file=params.log)
 
 # multiscale loop
 start_time = time.clock()
@@ -278,7 +296,7 @@ print(message, file=params.log)
 
 # save all outputs
 # TODO: this assumes a mask was given
-pad = 10    # TODO: magic number here, need better system for padding
+pad = 5    # TODO: magic number here, need better system for padding
 phi_out = np.zeros(params.grid)
 phi_out[slices[0], slices[1], slices[2]] = phi[pad:-pad, pad:-pad, pad:-pad]
 write_field(phi_out, args.output_directory+'/reconPhi', args.transform)
