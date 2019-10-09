@@ -56,9 +56,8 @@ def initialize_metric_kernel(a, b, c, d, vox, sh):
 
     # compute the scalar (or diagonal) term(s) of kernel
     for i in range(dim):
-        q = np.fft.fftfreq(sh[i])
-        X = 1 - np.cos(q*2.0*np.pi)
-        X *= 2*a/vox[i]
+        q = np.fft.fftfreq(sh[i], d=vox[i])
+        X = a * (1 - np.cos(q*2.0*np.pi))
         X = np.reshape(X, sha[i])*oa
         if b == 0.0:
             L += X
@@ -68,6 +67,7 @@ def initialize_metric_kernel(a, b, c, d, vox, sh):
             L[..., i, i] += b*X/a
 
     # compute off diagonal terms of kernel
+    # TODO: all b != 0 code is out of date and unlikely to work
     if b != 0.0:
         for i in range(dim):
             for j in range(i+1, dim):
@@ -94,7 +94,7 @@ def initialize_metric_kernel(a, b, c, d, vox, sh):
         for i in range(int(d-1)):
             L = np.einsum('...ij,...jk->...ik', L, cp)
         K = gu_pinv(L)
-    
+
     return L, K
 
 
@@ -125,7 +125,8 @@ def jacobian(v, vox):
     sh, d = v.shape[:-1], v.shape[-1]
     jac = np.empty(sh + (d, d))
     for i in range(d):
-        jac[..., i, :] = np.moveaxis(np.array(np.gradient(v[..., i], vox[i])), 0, -1)
+        grad = np.moveaxis(np.array(np.gradient(v[..., i], vox[i])), 0, -1)
+        jac[..., i, :] = np.ascontiguousarray(grad)
     return jac
 
 
@@ -171,12 +172,13 @@ def position_array(sh, vox):
     
     sh, vox = tuple(sh), np.array(vox, dtype=np.float)
     coords = np.array(np.meshgrid(*[range(x) for x in sh], indexing='ij'))
-    return vox * np.moveaxis(coords, 0, -1)
+    return vox * np.ascontiguousarray(np.moveaxis(coords, 0, -1))
 
 
 def apply_transform(img, vox, X, order=1):
     """Return img warped by transform X"""
 
+    # TODO: learn about behavior of map_coordinates w.r.t. memory order
     vox = np.array(vox, dtype=np.float)
     if len(img.shape) == len(vox):
         img = img[..., np.newaxis]
