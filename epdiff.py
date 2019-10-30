@@ -125,7 +125,7 @@ def jacobian(v, vox):
     sh, d = v.shape[:-1], v.shape[-1]
     jac = np.empty(sh + (d, d))
     for i in range(d):
-        grad = np.moveaxis(np.array(np.gradient(v[..., i], vox[i])), 0, -1)
+        grad = np.moveaxis(np.array(np.gradient(v[..., i], vox)), 0, -1)
         jac[..., i, :] = np.ascontiguousarray(grad)
     return jac
 
