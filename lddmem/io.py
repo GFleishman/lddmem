@@ -1,3 +1,5 @@
+from os.path import abspath
+import numpy as np
 
 
 def read_field(path, ext):
@@ -35,3 +37,4 @@ def write_field(field, path, ext):
             imagej=True,
             metadata={'axes':'ZCYX'},
         )
+

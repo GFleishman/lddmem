@@ -10,6 +10,8 @@ Began: May 2019
 
 import argparse
 from argparse import RawTextHelpFormatter
+from lddmem import io
+from os.path import splitext
 
 # VERSION INFORMATION
 VERSION = 'LDDMEm - Version: 0.0.1'
@@ -73,4 +75,24 @@ parser = argparse.ArgumentParser(description=DESCRIPTION,
 	                             formatter_class=RawTextHelpFormatter)
 for arg in ARGUMENTS.keys():
 	parser.add_argument(arg, **OPTIONS[arg])
+
+
+def parse_command_line_arguments():
+    """Read input transform and process command line args
+       args are not type or format checked, user must do it right"""
+
+    args = parser.parse_args()
+    constants = {}
+    constants['extension'] = splitext(args.transform)[1]
+    constants['phi'] = io.read_field(args.transform, constants['extension'])
+    constants['spacing'] = tuple(float(x) for x in args.transform_spacing.split('x'))
+    constants['output'] = args.output_directory
+    constants['iterations'] = tuple(int(x) for x in args.iterations.split('x'))
+    constants['time_steps'] = int(args.time_steps)
+    constants['abcd'] = tuple(float(x) for x in args.regularizer.split('x'))
+    constants['sigma'] = float(args.regularizer_balance)
+    constants['step'] = float(args.gradient_step)
+    constants['tolerance'] = float(args.optimization_tolerance)
+    constants['log'] = open(constants['output']+'/lddmem.log', 'w')
+    return constants
 

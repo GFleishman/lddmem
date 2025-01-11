@@ -15,31 +15,11 @@ recover v0 which integrates via advection to the given transform phiinv
 
 import numpy as np
 from lddmem import epdiff, io
-from lddmem.interface import parser
+from lddmem.cli import parse_command_line_arguments
 import time
 import scipy.ndimage as ndi
-from os.path import splitext, abspath, makedirs
-
-
-def parse_command_line_arguments(parser):
-    """Read input transform and process command line args
-       args are not type or format checked, user must do it right"""
-
-    args = parser.parse_args()
-    constants = {}
-
-    constants['extension'] = splitext(args.transform)[1]
-    constants['phi'] = io.read_field(args.transform, constants['extension'])
-    constants['spacing'] = tuple(float(x) for x in args.transform_spacing.split('x'))
-    constants['output'] = args.output_directory
-    constants['iterations'] = tuple(int(x) for x in args.iterations.split('x'))
-    constants['time_steps'] = int(args.time_steps)
-    constants['abcd'] = tuple(float(x) for x in args.regularizer.split('x'))
-    constants['sigma'] = float(args.regularizer_balance)
-    constants['step'] = float(args.gradient_step)
-    constants['tolerance'] = float(args.optimization_tolerance)
-    constants['log'] = open(constants['output']+'/lddmem.log', 'w')
-    return constants
+from os import makedirs
+from os.path import abspath
 
 
 def initialize_scale_level(constants, v0, level):
@@ -116,66 +96,65 @@ def backward_integration(constants, fields, residual):
     return _v
 
 
-# initialize containers, counters, and flags
-constants = parse_command_line_arguments(parser)
-fields = {'velocity':(None,)}
-makedirs(abspath(constants['output']), exist_ok=True)
-level = len(constants['iterations']) - 1
-compute_phi = False
+def lddmem(constants):
+    """Embed a smooth deformable transform in the LDDMM framework"""
 
-# record the arguments
-print(constants)
-print(constants, file=constants['log'])
+    fields = {'velocity':(None,)}
+    level = len(constants['iterations']) - 1
+    compute_phi = False
+    
+    # record the arguments
+    print(constants)
+    print(constants, file=constants['log'])
+    
+    # multiscale loop
+    start_time = time.perf_counter()
+    for local_iterations in constants['iterations']:
+    
+        # fields contianer for level and convergence criteria params
+        fields = initialize_scale_level(constants, fields['velocity'][0], level)
+        iteration, converged, local_step = 0, False, constants['step']
+        lowest_energy, lowest_v0 = (np.finfo(np.float64).max-1)/constants['tolerance'], 0
+    
+        # optimization loop for current level
+        while iteration < local_iterations and not converged:
+            t0 = time.perf_counter()
+            # only construct forward transform on last iteration of last level
+            if level == 0 and iteration == local_iterations - 1:
+                compute_phi = True
+            phiinv, phi = forward_integration(constants, fields, compute_phi)
+            residual, energy, max_residual, mean_residual = compute_residual(fields['phi'], phiinv)
+            if energy > constants['tolerance'] * lowest_energy:
+                energy, fields['velocity'][0] = lowest_energy, lowest_v0
+                local_step *= 0.5
+            elif not compute_phi:
+                if energy < lowest_energy:
+                    lowest_energy, lowest_v0 = energy, np.copy(fields['velocity'][0])
+                _v = backward_integration(constants, fields, residual)
+            # the gradient descent update
+            gradient = fields['velocity'][0] + (1./constants['sigma']**2) * _v
+            fields['velocity'][0] -= local_step * gradient
+    
+            # record progress
+            message = f'level-iteration: {level}-{iteration}\tenergy: {energy:.3f}\t'+ \
+                      f'mean|max err: {mean_residual:.3f}|{max_residual:.3f}\t'+\
+                      f'time: {time.perf_counter() - start_time:.3f}'
+            print(message)
+            print(message, file=constants['log'])
+                 
+            iteration += 1
+        level -= 1
 
-# record initial energy
-message = f"initial energy: {np.sum(constants['phi']**2)}"
-print(message)
-print(message, file=constants['log'])
+    return phiinv, phi, fields
+    
 
-# multiscale loop
-start_time = time.perf_counter()
-for local_iterations in constants['iterations']:
+if __name__ == "__main__":
 
-    # fields contianer for level and convergence criteria params
-    fields = initialize_scale_level(constants, fields['velocity'][0], level)
-    iteration, converged, local_step = 0, False, constants['step']
-    lowest_energy, lowest_v0 = (np.finfo(np.float64).max-1)/constants['tolerance'], 0
-
-    # optimization loop for current level
-    while iteration < local_iterations and not converged:
-        t0 = time.perf_counter()
-        # only construct forward transform on last iteration of last level
-        if level == 0 and iteration == local_iterations - 1:
-            compute_phi = True
-        phiinv, phi = forward_integration(constants, fields, compute_phi)
-        residual, energy, max_residual, mean_residual = compute_residual(fields['phi'], phiinv)
-        if energy > constants['tolerance'] * lowest_energy:
-            energy, fields['velocity'][0] = lowest_energy, lowest_v0
-            local_step *= 0.5
-        elif not compute_phi:
-            if energy < lowest_energy:
-                lowest_energy, lowest_v0 = energy, np.copy(fields['velocity'][0])
-            _v = backward_integration(constants, fields, residual)
-        # the gradient descent update
-        gradient = fields['velocity'][0] + (1./constants['sigma']**2) * _v
-        fields['velocity'][0] -= local_step * gradient
-
-        # record progress
-        message = f'level-iteration: {level}-{iteration}\tenergy: {energy:.3f}\t'+ \
-                  f'mean|max err: {mean_residual:.3f}|{max_residual:.3f}\t'+\
-                  f'time: {time.perf_counter() - start_time:.3f}'
-        print(message)
-        print(message, file=constants['log'])
-             
-        iteration += 1
-    level -= 1
-
-message = 'total optimization time: ' + str(time.perf_counter() - start_time)
-print(message)
-print(message, file=constants['log'])
-
-# save all outputs
-io.write_field(phi, constants['output']+'/reconPhi', constants['extension'])
-io.write_field(phiinv, constants['output']+'/reconPhiinv', constants['extension'])
-io.write_field(fields['velocity'][0], constants['output']+'/reconV0', constants['extension'])
+    # initialize containers, counters, and flags
+    constants = parse_command_line_arguments()
+    phiinv, phi, fields = lddmem(constants)
+    makedirs(abspath(constants['output']), exist_ok=True)
+    io.write_field(phi, constants['output']+'/reconPhi', constants['extension'])
+    io.write_field(phiinv, constants['output']+'/reconPhiinv', constants['extension'])
+    io.write_field(fields['velocity'][0], constants['output']+'/reconV0', constants['extension'])
 
