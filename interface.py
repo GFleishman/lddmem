@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-LDDMeM
+LDDMEm
 Large Deformation Diffeomorphic Metric Embedding
 
 Copyright: Greg M. Fleishman
@@ -12,11 +12,11 @@ import argparse
 from argparse import RawTextHelpFormatter
 
 # VERSION INFORMATION
-VERSION = 'LDDMeM - Version: 0.1'
+VERSION = 'LDDMEm - Version: 0.0.1'
 
 # DESCRIPTION
 DESCRIPTION = """
-~~~***~~**~*         LDDMeM         *~**~~***~~~
+~~~***~~**~*         LDDMEm         *~**~~***~~~
 Large Deformation Diffeomorphic Metric Embedding
 
 Embed existing deformation fields computed using
@@ -26,9 +26,14 @@ CMTK) in the LDDMM framework.
 Finds the closest approximation to a given
 deformation, in the least squares sense,
 by geodesic shooting on the manifold of
-diffeomorphisms. Writes out an initial velocity
+diffeomorphisms. Returns an initial velocity
 field which specifies the geodesic connecting
 the identity transform to the embedded transform.
+
+One deformation is fit at a time, however multiple
+initial velocities can be combined via the included
+Simple Geodesic Regression to obtain a geodesic
+which travels through a longer time series.
 ----    ---    ---    ----    ---    ---    ----
 """
 
@@ -43,10 +48,10 @@ OUTPUTS
 
 # ARGUMENTS
 ARGUMENTS = {
-'transform':'transform to embed - should be displacement not position field',
+'transform':'a displacement vector field, the transform to embed'
 'output_directory':'where to write all the amazing results',
 'iterations':'iterations per subsampling level, example: 100x50x25',
-'--mask':'foreground mask, positive where transform should me matched',
+'--mask':'foreground mask, non-zero where transform should me matched',
 '--time_steps':'number of time steps in geodesic shooting integration; default 6',
 '--regularizer':'AxBxCxD for metric (A*divgrad + B*graddiv + C)^D; default 12x0x1x2',
 '--regularizer_balance':'S in (1/S^2) * image-match + regularizer; default 0.03',
@@ -62,10 +67,10 @@ OPTIONS['--regularizer_balance'] = {**OPTIONS['--regularizer_balance'], 'default
 OPTIONS['--gradient_step'] = {**OPTIONS['--gradient_step'], 'default':'.001'}
 OPTIONS['--optimization_tolerance'] = {**OPTIONS['--optimization_tolerance'], 'default':'1.15'}
 
-
 # BUILD PARSER
 parser = argparse.ArgumentParser(description=DESCRIPTION,
 	                             epilog=EPILOGUE,
 	                             formatter_class=RawTextHelpFormatter)
 for arg in ARGUMENTS.keys():
 	parser.add_argument(arg, **OPTIONS[arg])
+

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-LDDMeM
+LDDMEm
 Large Deformation Diffeomorphic Metric Embedding
 
 Copyright: Greg M. Fleishman
