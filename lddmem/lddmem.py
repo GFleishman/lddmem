@@ -14,12 +14,11 @@ recover v0 which integrates via advection to the given transform phiinv
 """
 
 import numpy as np
-import epdiff, io
+from lddmem import epdiff, io
+from lddmem.interface import parser
 import time
 import scipy.ndimage as ndi
-from interface import parser
-import os
-from os.path import splitext, abspath
+from os.path import splitext, abspath, makedirs
 
 
 def parse_command_line_arguments(parser):
@@ -120,7 +119,7 @@ def backward_integration(constants, fields, residual):
 # initialize containers, counters, and flags
 constants = parse_command_line_arguments(parser)
 fields = {'velocity':(None,)}
-os.makedirs(abspath(constants['output']), exist_ok=True)
+makedirs(abspath(constants['output']), exist_ok=True)
 level = len(constants['iterations']) - 1
 compute_phi = False
 
