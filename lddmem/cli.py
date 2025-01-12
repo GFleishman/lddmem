@@ -14,7 +14,7 @@ from lddmem import io
 from os.path import splitext
 
 # VERSION INFORMATION
-VERSION = 'LDDMEm - Version: 0.0.1'
+VERSION = 'LDDMEm - Version: 0.0.0'
 
 # DESCRIPTION
 DESCRIPTION = """
@@ -58,7 +58,8 @@ ARGUMENTS = {
 '--regularizer':'AxBxCxD for metric (A*divgrad + B*graddiv + C)^D; default 12x0x1x2',
 '--regularizer_balance':'S in (1/S^2) * image-match + regularizer; default 0.03',
 '--gradient_step':'initial gradient descent step size; default 0.001',
-'--optimization_tolerance':'factor by which energy may *increase* between iterations; default 1.15'
+'--optimization_tolerance':'factor by which energy may *increase* between iterations; default 1.15',
+'--threads':'number of threads FFTW should use; default 1',
 }
 
 # OPTIONS
@@ -68,6 +69,7 @@ OPTIONS['--regularizer'] = {**OPTIONS['--regularizer'], 'default':'12.0x0x1x2'}
 OPTIONS['--regularizer_balance'] = {**OPTIONS['--regularizer_balance'], 'default':'.03'}
 OPTIONS['--gradient_step'] = {**OPTIONS['--gradient_step'], 'default':'.001'}
 OPTIONS['--optimization_tolerance'] = {**OPTIONS['--optimization_tolerance'], 'default':'1.15'}
+OPTIONS['--threads'] = {**OPTIONS['--threads'], 'default':'1'}
 
 # BUILD PARSER
 parser = argparse.ArgumentParser(description=DESCRIPTION,
@@ -98,5 +100,6 @@ def parse_command_line_arguments():
     inputs['regularizer_balance'] = float(args.regularizer_balance)
     inputs['gradient_step'] = float(args.gradient_step)
     inputs['optimization_tolerance'] = float(args.optimization_tolerance)
+    inputs['threads'] = int(args.threads)
     return inputs
 

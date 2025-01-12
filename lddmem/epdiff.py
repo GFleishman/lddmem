@@ -10,9 +10,41 @@ Began: May 2019
 
 import pyfftw
 import numpy as np
-import scipy.ndimage as ndii
+from scipy.ndimage import map_coordinates
+
 
 ffter, iffter = None, None
+def initializeFFTW(sh, threads):
+    """Initialize the forward and inverse transforms"""
+    global ffter, iffter
+    sh, ax = tuple(sh), list(range(len(sh)))
+    inp = pyfftw.empty_aligned(sh, dtype=np.float64)
+    outp_sh = sh[:-1] + (sh[-1]//2+1,) 
+    outp = pyfftw.empty_aligned(outp_sh, dtype=np.complex128)
+    ffter = pyfftw.FFTW(inp, outp, axes=ax, threads=threads)
+    iffter = pyfftw.FFTW(outp, inp, axes=ax, direction='FFTW_BACKWARD', threads=threads)
+
+
+def fft(f):
+    """Return the DFT of the real valued vector field f"""
+
+    global ffter
+    sh, d = f.shape[:-1], f.shape[-1]
+    F = np.empty(sh[:-1] + (sh[-1]//2+1, d), dtype=np.complex128)
+    for i in range(d):
+        F[..., i] = ffter(f[..., i])
+    return F
+
+
+def ifft(F, sh):
+    """Return the iDFT of the vector field F"""
+
+    global iffter
+    f = np.empty(sh, dtype='float64')
+    for i in range(sh[-1]):
+            f[..., i] = iffter(F[..., i])
+    return f
+
 
 def gu_pinv(a, rcond=1e-15):
     """Return the pseudo-inverse of matrices at every voxel"""
@@ -30,18 +62,7 @@ def gu_pinv(a, rcond=1e-15):
                      np.transpose(u, swap))
 
 
-def initializeFFTW(sh):
-    """Initialize the forward and inverse transforms"""
-    global ffter, iffter
-    sh, ax = tuple(sh), list(range(len(sh)))
-    inp = pyfftw.empty_aligned(sh, dtype=np.float64)
-    outp_sh = sh[:-1] + (sh[-1]//2+1,) 
-    outp = pyfftw.empty_aligned(outp_sh, dtype=np.complex128)
-    ffter = pyfftw.FFTW(inp, outp, axes=ax, threads=1)
-    iffter = pyfftw.FFTW(outp, inp, axes=ax, direction='FFTW_BACKWARD', threads=1)
-
-
-def initialize_metric_kernel(a, b, c, d, vox, sh):
+def initialize_metric_kernel(a, b, c, d, sh, vox):
     """Precompute the metric kernel and inverse"""
 
     # define some useful ingredients for later
@@ -98,36 +119,12 @@ def initialize_metric_kernel(a, b, c, d, vox, sh):
     return L, K
 
 
-def fft(f):
-    """Return the DFT of the real valued vector field f"""
-
-    global ffter
-    sh, d = f.shape[:-1], f.shape[-1]
-    F = np.empty(sh[:-1] + (sh[-1]//2+1, d), dtype=np.complex128)
-    for i in range(d):
-        F[..., i] = ffter(f[..., i])
-    return F
-
-
-def ifft(F, sh):
-    """Return the iDFT of the vector field F"""
-
-    global iffter
-    f = np.empty(sh, dtype='float64')
-    for i in range(sh[-1]):
-            f[..., i] = iffter(F[..., i])
-    return f
-
-
 def jacobian(v, vox):
     """Return Jacobian field of vector field v"""
 
-    sh, d = v.shape[:-1], v.shape[-1]
-    jac = np.empty(sh + (d, d))
-    for i in range(d):
-        grad = np.moveaxis(np.array(np.gradient(v[..., i], *vox)), 0, -1)
-        jac[..., i, :] = np.ascontiguousarray(grad)
-    return jac
+    jac = np.gradient(v, *vox, axis=range(v.shape[-1]))
+    jac = np.moveaxis(np.array(jac), 0, -1)  # XXX possibly should be -2 which would transpose all jacs
+    return np.ascontiguousarray(jac)
 
 
 def divergence(v, vox, Dv=None):
@@ -171,22 +168,20 @@ def position_array(sh, vox):
     """Return a position array in physical coordinates with shape sh"""
     
     sh, vox = tuple(sh), np.array(vox, dtype=np.float64)
-    coords = np.array(np.meshgrid(*[range(x) for x in sh], indexing='ij'))
+    coords = np.mgrid[tuple(slice(x) for x in sh)]
     return vox * np.ascontiguousarray(np.moveaxis(coords, 0, -1))
 
 
-def apply_transform(img, vox, X, order=1):
+def apply_transform(img, X, vox, order=1):
     """Return img warped by transform X"""
 
-    # TODO: learn about behavior of map_coordinates w.r.t. memory order
     vox = np.array(vox, dtype=np.float64)
     if len(img.shape) == len(vox):
         img = img[..., np.newaxis]
-    X *= 1./vox
     ret = np.empty(X.shape[:-1] + (img.shape[-1],))
+    X *= 1./vox
     X = np.moveaxis(X, -1, 0)
     for i in range(img.shape[-1]):
-        ret[..., i] = ndii.map_coordinates(img[..., i], X,
-                                           order=order, mode='constant')
+        ret[..., i] = map_coordinates(img[..., i], X, order=order)
     return ret.squeeze()
 
