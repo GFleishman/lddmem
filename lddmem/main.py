@@ -6,11 +6,6 @@ Large Deformation Diffeomorphic Metric Embedding
 
 Copyright: Greg M. Fleishman
 Began: May 2019
-
-This code assumes that the input transform is phiinv relative to
-the velocity we wish to estimate. I.e., the velocity is defined in the
-coordinates of the image which was labeled as "moving" and we aim to
-recover v0 which integrates via advection to the given transform phiinv
 """
 
 import numpy as np
@@ -41,14 +36,14 @@ def initialize_geodesic(
     geodesic = {}
     transform = np.copy(transform)
     if level > 0:
-        transform = gaussian_filter(transform, 2**level, axes=range(transform.ndim-1))
-        transform = zoom(transform, (1./2**level,)*3 + (1,))
+        transform = gaussian_filter(transform, 2**level, axes=range(transform.ndim-1), mode='wrap')
+        transform = zoom(transform, (1./2**level,)*3 + (1,), mode='grid-wrap')
     geodesic['endpoint'] = transform
 
     geodesic['velocity_flow'] = np.zeros((time_steps,) + transform.shape)
     if v0 is not None:
         zoom_factors = tuple(x/y for x, y in zip(transform.shape[:-1], v0.shape[:-1]))
-        geodesic['velocity_flow'][0] = zoom(v0, zoom_factors + (1,))
+        geodesic['velocity_flow'][0] = zoom(v0, zoom_factors + (1,), mode='grid-wrap')
 
     geodesic['spacing'] = np.array(transform_spacing) * 2**level
     geodesic['position'] = epdiff.position_array(transform.shape[:-1], geodesic['spacing'])
@@ -59,26 +54,27 @@ def initialize_geodesic(
     geodesic['inverse_metric'] = K
     return geodesic
 
-# TODO: review forward_integration and backward_integration, find papers! look at my thesis!
 
-def forward_integration(geodesic, time_steps, compute_phi):
+def forward_integration(geodesic, time_steps, compute_inverse):
     """Integrate geodesic forward to construct inverse transform"""
 
     dt = 1./(time_steps-1)
-    phi, phiinv = 0, 0
+    transform, inverse = 0, 0
     v = geodesic['velocity_flow']
     X, spacing = geodesic['position'], geodesic['spacing']
     L, K = geodesic['metric'], geodesic['inverse_metric']
     for i in range(time_steps-1):
-        if compute_phi:
-            phi += dt * epdiff.apply_transform(v[i], X+phi, spacing)
-        jacobian = epdiff.jacobian(X+phiinv, spacing)
-        phiinv -= dt * np.einsum('...ij,...j->...i', jacobian, v[i])
+        transform += dt * epdiff.apply_transform(v[i], X+transform, spacing)
+        if compute_inverse:
+            jacobian = epdiff.jacobian(X+inverse, spacing)
+            inverse -= dt * np.einsum('...ij,...j->...i', jacobian, v[i])
         m = epdiff.ifft(L * epdiff.fft(v[i]), v[i].shape)
         v[i+1] = v[i] + dt * epdiff.adTranspose(v[i], m, K, spacing)
-    return phiinv, phi
+    return transform, inverse
 
 
+# TODO: jacobian of v is calculated in forward pass, can be saved
+#       offer user option between faster+more memory and slower+save memory
 def backward_integration(geodesic, residual, time_steps):
     """Integrate adjoint system backward to get gradient at t0"""
 
@@ -90,16 +86,16 @@ def backward_integration(geodesic, residual, time_steps):
         Dv = epdiff.jacobian(v[i], spacing)
         D_v = epdiff.jacobian(_v, spacing)
         _v += dt * (_i - epdiff.ad(v[i], _v, spacing, Dv=Dv, Dm=D_v) + \
-                          epdiff.adTranspose(_v, v[i], K, spacing, Dv=D_v, Dm=Dv))
+                    epdiff.adTranspose(_v, v[i], K, spacing, Dv=D_v, Dm=Dv))
         _i += dt * epdiff.adTranspose(v[i], _i, K, spacing, Dv=Dv)
     _v = epdiff.ifft(K * epdiff.fft(_v), _v.shape)
     return _v
 
 
-def compute_residual(phi_given, phi_estimated, spacing):
+def compute_residual(transform, embedded_transform, spacing):
     """Compute residual (SSD)"""
 
-    residual = phi_given - phi_estimated
+    residual = transform - embedded_transform
     energy = residual * residual
     residual_magnitudes = np.sqrt(np.sum(energy, axis=-1))
     max_residual = residual_magnitudes.max()
@@ -170,56 +166,64 @@ def lddmem(
 
     Returns
     -------
-    phiinv : transform
+    embedded_transform :
 
-    phi : transform
+    embedded_transform_inverse :
 
-    geodesic : extra crap
-
-    log_string : string
+    initial_velocity :
     """
 
     # TODO: IMPLEMENT MULTISCALE W.R.T. TIME DISCRETIZATION!
 
     # multiscale loop
     start_time = time.perf_counter()
-    geodesic = {'velocity_flow':(None,)}
     for level, local_iterations in enumerate(iterations):
 
-        # level specific loop
+        # resample all fields for level
         geodesic = initialize_geodesic(
-            len(iterations)-level-1, transform, transform_spacing,
-            geodesic['velocity_flow'][0],
-            time_steps, regularizer,
+            len(iterations)-level-1,
+            transform,
+            transform_spacing,
+            geodesic['velocity_flow'][0] if level > 0 else None,
+            time_steps,
+            regularizer,
             threads,
         )
+
+        # level specific loop
         local_step = gradient_step
-        lowest_v0 = None
-        lowest_energy = np.sum(transform**2)
+        lowest_energy = np.finfo(np.float64).max
+        lowest_v0 = np.copy(geodesic['velocity_flow'][0])
         for iteration in range(local_iterations):
 
-            compute_phi = level == len(iterations)-1 and iteration == local_iterations-1
-            phiinv, phi = forward_integration(geodesic, time_steps, compute_phi)
+            # forward integrate and compute residual
+            compute_inverse = level == len(iterations)-1 and iteration == local_iterations-1
+            embedded_transform, inverse = forward_integration(geodesic, time_steps, compute_inverse)
             residual, energy, max_residual, mean_residual = compute_residual(
-                geodesic['endpoint'], phiinv, geodesic['spacing'],
+                geodesic['endpoint'], embedded_transform, geodesic['spacing'],
             )
+
+            # if previous step was bad, reset
             if energy > optimization_tolerance * lowest_energy:
-                energy, geodesic['velocity_flow'][0] = lowest_energy, lowest_v0
+                energy = lowest_energy
+                geodesic['velocity_flow'][0] = np.copy(lowest_v0)
                 local_step *= 0.5
-            elif not compute_phi:
+
+            # otherwise, backward integrate and update initial velocity
+            elif not compute_inverse:
                 if energy < lowest_energy:
-                    lowest_energy, lowest_v0 = energy, np.copy(geodesic['velocity_flow'][0])
+                    lowest_energy = energy
+                    lowest_v0 = np.copy(geodesic['velocity_flow'][0])
                 _v = backward_integration(geodesic, residual, time_steps)
-            # the gradient descent update
-            gradient = geodesic['velocity_flow'][0] + (1./regularizer_balance**2) * _v
-            geodesic['velocity_flow'][0] -= local_step * gradient
+                gradient = geodesic['velocity_flow'][0] + (1./regularizer_balance**2) * _v
+                geodesic['velocity_flow'][0] += local_step * gradient
 
             # record progress
             message = f'level-iteration: {level}-{iteration}    energy: {energy:.3f}    '+ \
                       f'mean|max err: {mean_residual:.3f}|{max_residual:.3f}    '+\
                       f'time: {time.perf_counter() - start_time:.3f}'
             print(message)
-    return phiinv, phi, geodesic
+    return embedded_transform, inverse, geodesic['velocity_flow'][0]
 
 
 if __name__ == "__main__":
@@ -229,9 +233,9 @@ if __name__ == "__main__":
     extension = inputs.pop('extension')
     output_directory = inputs.pop('output_directory')
     log = inputs.pop('log')
-    phiinv, phi, geodesic = lddmem(**inputs)
+    embedded_transform, inverse, initial_velocity = lddmem(**inputs)
     makedirs(abspath(output_directory), exist_ok=True)
-    io.write_field(phi, output_directory+'/reconPhi', extension)
-    io.write_field(phiinv, output_directory+'/reconPhiinv', extension)
-    io.write_field(geodesic['velocity_flow'][0], output_directory+'/reconV0', extension)
+    io.write_field(embedded_transform, output_directory+'/embedded_transform', extension)
+    io.write_field(inverse, output_directory+'/embedded_transform_inverse', extension)
+    io.write_field(initial_velocity, output_directory+'/initial_velocity', extension)
 

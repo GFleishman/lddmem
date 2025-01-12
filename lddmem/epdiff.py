@@ -13,7 +13,7 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 
 
-#TODO: STILL NEED TO CHECK gu_pinv, initialize_metric_kernel, ad, adTranspose
+#TODO: STILL NEED TO CHECK gu_pinv, initialize_metric_kernel
 
 
 ffter, iffter = None, None
@@ -125,8 +125,8 @@ def initialize_metric_kernel(a, b, c, d, sh, vox):
 def jacobian(v, vox):
     """Return Jacobian field of vector field v"""
 
-    jac = np.gradient(v, *vox, axis=range(v.shape[-1]))
-    jac = np.moveaxis(np.array(jac), 0, -1)  # XXX logically -2 seems right, but -1 tests better
+    jac = np.gradient(v, *vox, axis=range(v.shape[-1]), edge_order=2)
+    jac = np.moveaxis(np.array(jac), 0, -1)
     return np.ascontiguousarray(jac)
 
 
@@ -183,6 +183,6 @@ def apply_transform(img, X, vox, order=1):
     X *= 1./vox
     X = np.moveaxis(X, -1, 0)
     for i in range(img.shape[-1]):
-        ret[..., i] = map_coordinates(img[..., i], X, order=order)
+        ret[..., i] = map_coordinates(img[..., i], X, order=order, mode='grid-wrap')
     return ret.squeeze()
 
