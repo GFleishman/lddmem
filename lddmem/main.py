@@ -96,8 +96,73 @@ def backward_integration(constants, fields, residual):
     return _v
 
 
-def lddmem(constants):
-    """Embed a smooth deformable transform in the LDDMM framework"""
+def lddmem(
+    transform,
+    transform_spacing,
+    iterations,
+    time_steps=6,
+    regularizer=(12, 0, 1, 2),
+    regularizer_balance=0.03,
+    gradient_step=0.001,
+    optimization_tolerance=1.15,
+):
+    """
+    Embed a smooth deformable transform in the LDDMM framework
+
+    Parameters
+    ----------
+    transform : numpy.ndarray
+        The transform you want to embed. Only accepts 3D or 4D arrays and the
+        vector axis should be the last one. That is, if you registered 2D images
+        then this transform should have axes (X1, X2, V) for spatial dimensions X.
+        If you registered 3D images then this transform should have axes (X1, X2, X3, V).
+
+    transform_spacing : tuple of two or three values
+        The voxel sampling rate of the transform. If your transform is a 2D vector field
+        this should be two numbers, if your transform is a 3D vector field this shoud
+        be three numbers.
+
+    iterations : tuple
+        The number of iterations to optimize at each scale. The optimization is multi-scale.
+        The length of this tuple indicates the number of scales you wish to use. Scales are
+        always a factor of two different along each axis. For example, if iterations==(100x50x25)
+        then optimization will run 100 iterations at 4x downsampling along each axis, then
+        50 iterations at 2x downsampling along each axis, then 25 iterations at full resolution.
+
+    time_steps : int (default: 6)
+        The number of discrete time points at which the velocity flow integration is sampled.
+
+    regularizer : tuple of four numbers (default: (12, 0, 1, 2))
+        The Riemannian metric used is A*divgrad + B*graddiv + C)**D
+        This input indicates (A, B, C, D). If A, B, and C are all non-zero then this
+        is a multiple of an elastic operator. If A and C are non-zero then this is
+        a multiple of a diffusion operator.
+
+    regularizer_balance : float (default: 0.03)
+        The optimization loss function is: (1/S**2) * image-match + regularizer; this
+        parameter is S. Smaller values prioritize more accurate matching but optimizations
+        can become unstable.
+
+    gradient_step : float (default: 0.001)
+        Initial gradient descent step size. On any iteration that the objective function
+        increases more than a specified threshold, the gradient_step is cut in half.
+
+    optimization_tolerance : float greater than 1.0 (default: 1.15)
+        A multiplicative factor that determines how much the objective function is allowed to
+        increase on any given iteration before the gradient_step is cut in half.
+
+    Returns
+    -------
+    phiinv : transform
+
+    phi : transform
+
+    fields : extra crap
+
+    log_string : string
+    """
+
+    constants = {}
 
     fields = {'velocity':(None,)}
     level = len(constants['iterations']) - 1

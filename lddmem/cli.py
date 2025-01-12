@@ -52,8 +52,8 @@ OUTPUTS
 ARGUMENTS = {
 'transform':'file path displacement vector field, the transform to embed (.nrrd, .nii.gz, or .tiff)',
 'transform_spacing':'spatial samping rate of transform in physical units, e.g. 2x1x1',
-'output_directory':'path to folder where all the amazing results will be written',
 'iterations':'iterations per subsampling level, example: 100x50x25',
+'output_directory':'path to folder where all the amazing results will be written',
 '--time_steps':'number of time steps in geodesic shooting integration; default 6',
 '--regularizer':'AxBxCxD for metric (A*divgrad + B*graddiv + C)^D; default 12x0x1x2',
 '--regularizer_balance':'S in (1/S^2) * image-match + regularizer; default 0.03',
@@ -83,16 +83,20 @@ def parse_command_line_arguments():
 
     args = parser.parse_args()
     constants = {}
+
+    # cli specific values
     constants['extension'] = splitext(args.transform)[1]
-    constants['phi'] = io.read_field(args.transform, constants['extension'])
-    constants['spacing'] = tuple(float(x) for x in args.transform_spacing.split('x'))
-    constants['output'] = args.output_directory
+    constants['output_directory'] = args.output_directory
+    constants['log'] = open(constants['output']+'/lddmem.log', 'w')
+
+    # function inputs
+    constants['transform'] = io.read_field(args.transform, constants['extension'])
+    constants['transform_spacing'] = tuple(float(x) for x in args.transform_spacing.split('x'))
     constants['iterations'] = tuple(int(x) for x in args.iterations.split('x'))
     constants['time_steps'] = int(args.time_steps)
-    constants['abcd'] = tuple(float(x) for x in args.regularizer.split('x'))
-    constants['sigma'] = float(args.regularizer_balance)
-    constants['step'] = float(args.gradient_step)
-    constants['tolerance'] = float(args.optimization_tolerance)
-    constants['log'] = open(constants['output']+'/lddmem.log', 'w')
+    constants['regularizer'] = tuple(float(x) for x in args.regularizer.split('x'))
+    constants['regularizer_balance'] = float(args.regularizer_balance)
+    constants['gradient_step'] = float(args.gradient_step)
+    constants['optimization_tolerance'] = float(args.optimization_tolerance)
     return constants
 
