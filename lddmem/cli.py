@@ -82,21 +82,21 @@ def parse_command_line_arguments():
        args are not type or format checked, user must do it right"""
 
     args = parser.parse_args()
-    constants = {}
+    inputs = {}
 
-    # cli specific values
-    constants['extension'] = splitext(args.transform)[1]
-    constants['output_directory'] = args.output_directory
-    constants['log'] = open(constants['output']+'/lddmem.log', 'w')
+    # cli specific inputs
+    inputs['extension'] = splitext(args.transform)[1]
+    inputs['output_directory'] = args.output_directory
+    inputs['log'] = open(inputs['output_directory']+'/lddmem.log', 'w')
 
     # function inputs
-    constants['transform'] = io.read_field(args.transform, constants['extension'])
-    constants['transform_spacing'] = tuple(float(x) for x in args.transform_spacing.split('x'))
-    constants['iterations'] = tuple(int(x) for x in args.iterations.split('x'))
-    constants['time_steps'] = int(args.time_steps)
-    constants['regularizer'] = tuple(float(x) for x in args.regularizer.split('x'))
-    constants['regularizer_balance'] = float(args.regularizer_balance)
-    constants['gradient_step'] = float(args.gradient_step)
-    constants['optimization_tolerance'] = float(args.optimization_tolerance)
-    return constants
+    inputs['transform'] = io.read_field(args.transform, inputs['extension'])
+    inputs['transform_spacing'] = tuple(float(x) for x in args.transform_spacing.split('x'))
+    inputs['iterations'] = tuple(int(x) for x in args.iterations.split('x'))
+    inputs['time_steps'] = int(args.time_steps)
+    inputs['regularizer'] = tuple(float(x) for x in args.regularizer.split('x'))
+    inputs['regularizer_balance'] = float(args.regularizer_balance)
+    inputs['gradient_step'] = float(args.gradient_step)
+    inputs['optimization_tolerance'] = float(args.optimization_tolerance)
+    return inputs
 

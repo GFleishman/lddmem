@@ -22,44 +22,46 @@ from os import makedirs
 from os.path import abspath
 
 
-def initialize_scale_level(constants, v0, level):
+def initialize_scale_level(
+    level, transform, transform_spacing, v0, time_steps, regularizer,
+):
     """Resample target transform and initial velocity
     initialize other objects for scale level"""
 
     fields = {}
-    phi = np.copy(constants['phi'])
+    phi = np.copy(transform)
     full_shape = phi.shape
     if level != 0:
         epdiff.initializeFFTW(full_shape[:-1])
         aaL, aaK = epdiff.initialize_metric_kernel(
             2**level, 0, 1, 2,
-            constants['spacing'], full_shape[:-1],
+            transform_spacing, full_shape[:-1],
         )
         phi = epdiff.ifft(aaK * epdiff.fft(phi), full_shape)
         phi = ndi.zoom(phi, (1./2**level,)*3 + (1,), mode='wrap')
     fields['phi'] = phi
     level_shape = phi.shape
 
-    fields['velocity'] = np.zeros((constants['time_steps'],) + level_shape)
+    fields['velocity'] = np.zeros((time_steps,) + level_shape)
     if v0 is not None:
         zoom_factors = tuple(x/y for x, y in zip(level_shape[:-1], v0.shape[:-1]))
         fields['velocity'][0] = ndi.zoom(v0, zoom_factors + (1,), mode='nearest')
 
     epdiff.initializeFFTW(level_shape[:-1])
-    fields['spacing'] = np.array(constants['spacing']) * 2**level
+    fields['spacing'] = np.array(transform_spacing) * 2**level
     fields['position'] = epdiff.position_array(level_shape[:-1], fields['spacing'])
-    L, K = epdiff.initialize_metric_kernel(*constants['abcd'], fields['spacing'], level_shape[:-1])
+    L, K = epdiff.initialize_metric_kernel(*regularizer, fields['spacing'], level_shape[:-1])
     fields['metric'], fields['inverse_metric'] = L, K
     return fields
 
 
-def forward_integration(constants, fields, compute_phi):
+def forward_integration(fields, time_steps, compute_phi):
     """Integrate geodesic forward to construct inverse transform"""
 
-    dt = 1./(constants['time_steps']-1)
+    dt = 1./(time_steps-1)
     phi, phiinv = 0, 0
     v, X = fields['velocity'], fields['position']
-    for i in range(constants['time_steps']-1):
+    for i in range(time_steps-1):
         if compute_phi:
             phi += dt * epdiff.apply_transform(v[i], fields['spacing'], X+phi)
         phiinv -= dt * np.einsum('...ij,...j->...i', epdiff.jacobian(X+phiinv, fields['spacing']), v[i])
@@ -81,13 +83,13 @@ def compute_residual(phi_given, phi_estimated):
     return residual, np.sum(energy), max_residual, mean_residual
 
 
-def backward_integration(constants, fields, residual):
+def backward_integration(fields, residual, time_steps):
     """Integrate adjoint system backward to get gradient at t0"""
 
-    dt = 1./(constants['time_steps']-1)
+    dt = 1./(time_steps-1)
     v, K = fields['velocity'], fields['inverse_metric']
     _v, _i = np.zeros_like(residual), residual
-    for i in range(1, constants['time_steps'])[::-1]:
+    for i in range(1, time_steps)[::-1]:
         Dv, D_v = epdiff.jacobian(v[i], fields['spacing']), epdiff.jacobian(_v, fields['spacing'])
         _v += dt * (_i - epdiff.ad(v[i], _v, fields['spacing'], Dv=Dv, Dm=D_v) + \
                           epdiff.adTranspose(_v, v[i], K, fields['spacing'], Dv=D_v, Dm=Dv))
@@ -162,64 +164,55 @@ def lddmem(
     log_string : string
     """
 
-    constants = {}
-
-    fields = {'velocity':(None,)}
-    level = len(constants['iterations']) - 1
-    compute_phi = False
-    
-    # record the arguments
-    print(constants)
-    print(constants, file=constants['log'])
-    
     # multiscale loop
     start_time = time.perf_counter()
-    for local_iterations in constants['iterations']:
-    
-        # fields contianer for level and convergence criteria params
-        fields = initialize_scale_level(constants, fields['velocity'][0], level)
-        iteration, converged, local_step = 0, False, constants['step']
-        lowest_energy, lowest_v0 = (np.finfo(np.float64).max-1)/constants['tolerance'], 0
-    
-        # optimization loop for current level
-        while iteration < local_iterations and not converged:
-            t0 = time.perf_counter()
+    fields = {'velocity':(None,)}
+    for level, local_iterations in enumerate(iterations):
+
+        # level specific loop
+        fields = initialize_scale_level(
+            len(iterations)-level-1, transform, transform_spacing,
+            fields['velocity'][0],
+            time_steps, regularizer,
+        )
+        local_step = gradient_step
+        lowest_v0 = None
+        lowest_energy = np.sum(transform**2)
+        for iteration in range(local_iterations):
+
             # only construct forward transform on last iteration of last level
-            if level == 0 and iteration == local_iterations - 1:
-                compute_phi = True
-            phiinv, phi = forward_integration(constants, fields, compute_phi)
+            compute_phi = level == len(iterations)-1 and iteration == local_iterations-1
+            phiinv, phi = forward_integration(fields, time_steps, compute_phi)
             residual, energy, max_residual, mean_residual = compute_residual(fields['phi'], phiinv)
-            if energy > constants['tolerance'] * lowest_energy:
+            if energy > optimization_tolerance * lowest_energy:
                 energy, fields['velocity'][0] = lowest_energy, lowest_v0
                 local_step *= 0.5
             elif not compute_phi:
                 if energy < lowest_energy:
                     lowest_energy, lowest_v0 = energy, np.copy(fields['velocity'][0])
-                _v = backward_integration(constants, fields, residual)
+                _v = backward_integration(fields, residual, time_steps)
             # the gradient descent update
-            gradient = fields['velocity'][0] + (1./constants['sigma']**2) * _v
+            gradient = fields['velocity'][0] + (1./regularizer_balance**2) * _v
             fields['velocity'][0] -= local_step * gradient
-    
+
             # record progress
             message = f'level-iteration: {level}-{iteration}\tenergy: {energy:.3f}\t'+ \
                       f'mean|max err: {mean_residual:.3f}|{max_residual:.3f}\t'+\
                       f'time: {time.perf_counter() - start_time:.3f}'
             print(message)
-            print(message, file=constants['log'])
-                 
-            iteration += 1
-        level -= 1
-
     return phiinv, phi, fields
-    
+
 
 if __name__ == "__main__":
 
     # initialize containers, counters, and flags
-    constants = parse_command_line_arguments()
-    phiinv, phi, fields = lddmem(constants)
-    makedirs(abspath(constants['output']), exist_ok=True)
-    io.write_field(phi, constants['output']+'/reconPhi', constants['extension'])
-    io.write_field(phiinv, constants['output']+'/reconPhiinv', constants['extension'])
-    io.write_field(fields['velocity'][0], constants['output']+'/reconV0', constants['extension'])
+    inputs = parse_command_line_arguments()
+    extension = inputs.pop('extension')
+    output_directory = inputs.pop('output_directory')
+    log = inputs.pop('log')
+    phiinv, phi, fields = lddmem(**inputs)
+    makedirs(abspath(output_directory), exist_ok=True)
+    io.write_field(phi, output_directory+'/reconPhi', extension)
+    io.write_field(phiinv, output_directory+'/reconPhiinv', extension)
+    io.write_field(fields['velocity'][0], output_directory+'/reconV0', extension)
 
