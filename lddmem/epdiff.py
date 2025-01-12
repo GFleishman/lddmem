@@ -13,6 +13,9 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 
 
+#TODO: STILL NEED TO CHECK gu_pinv, initialize_metric_kernel, ad, adTranspose
+
+
 ffter, iffter = None, None
 def initializeFFTW(sh, threads):
     """Initialize the forward and inverse transforms"""
@@ -123,7 +126,7 @@ def jacobian(v, vox):
     """Return Jacobian field of vector field v"""
 
     jac = np.gradient(v, *vox, axis=range(v.shape[-1]))
-    jac = np.moveaxis(np.array(jac), 0, -1)  # XXX possibly should be -2 which would transpose all jacs
+    jac = np.moveaxis(np.array(jac), 0, -1)  # XXX logically -2 seems right, but -1 tests better
     return np.ascontiguousarray(jac)
 
 
@@ -146,9 +149,7 @@ def adTranspose(v, m, K, vox, Dv=None, Dm=None):
     if Dv is None: Dv = jacobian(v, vox)
     if Dm is None: Dm = jacobian(m, vox)
     divv = divergence(v, vox, Dv=Dv)
-    permutation = list(range(len(Dv.shape)))
-    permutation.append(permutation.pop(-2))
-    DvT = np.transpose(Dv, permutation)
+    DvT = np.moveaxis(Dv, -2, -1)
     adT = np.einsum('...ij,...j->...i', DvT, m)
     adT += np.einsum('...ij,...j->...i', Dm, v)
     adT += m * divv[..., np.newaxis]

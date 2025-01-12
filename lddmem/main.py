@@ -59,6 +59,7 @@ def initialize_geodesic(
     geodesic['inverse_metric'] = K
     return geodesic
 
+# TODO: review forward_integration and backward_integration, find papers! look at my thesis!
 
 def forward_integration(geodesic, time_steps, compute_phi):
     """Integrate geodesic forward to construct inverse transform"""
@@ -95,15 +96,15 @@ def backward_integration(geodesic, residual, time_steps):
     return _v
 
 
-def compute_residual(phi_given, phi_estimated):
+def compute_residual(phi_given, phi_estimated, spacing):
     """Compute residual (SSD)"""
 
     residual = phi_given - phi_estimated
     energy = residual * residual
     residual_magnitudes = np.sqrt(np.sum(energy, axis=-1))
     max_residual = residual_magnitudes.max()
-    mean_residual = np.mean(residual_magnitudes)
-    residual *= 1./max_residual
+    mean_residual = residual_magnitudes.mean()
+    residual *= spacing.min()/max_residual
     return residual, np.sum(energy), max_residual, mean_residual
 
 
@@ -143,6 +144,7 @@ def lddmem(
 
     time_steps : int (default: 6)
         The number of discrete time points at which the velocity flow integration is sampled.
+        The smallest acceptable value is 3.
 
     regularizer : tuple of four numbers (default: (12, 0, 1, 2))
         The Riemannian metric used is A*divgrad + B*graddiv + C)**D
@@ -151,7 +153,7 @@ def lddmem(
         a multiple of a diffusion operator.
 
     regularizer_balance : float (default: 0.03)
-        The optimization loss function is: (1/S**2) * image-match + regularizer; this
+        The optimization loss function is: (1/S**2) * field-match + regularizer; this
         parameter is S. Smaller values prioritize more accurate matching but optimizations
         can become unstable.
 
@@ -177,6 +179,8 @@ def lddmem(
     log_string : string
     """
 
+    # TODO: IMPLEMENT MULTISCALE W.R.T. TIME DISCRETIZATION!
+
     # multiscale loop
     start_time = time.perf_counter()
     geodesic = {'velocity_flow':(None,)}
@@ -194,10 +198,11 @@ def lddmem(
         lowest_energy = np.sum(transform**2)
         for iteration in range(local_iterations):
 
-            # only construct forward transform on last iteration of last level
             compute_phi = level == len(iterations)-1 and iteration == local_iterations-1
             phiinv, phi = forward_integration(geodesic, time_steps, compute_phi)
-            residual, energy, max_residual, mean_residual = compute_residual(geodesic['endpoint'], phiinv)
+            residual, energy, max_residual, mean_residual = compute_residual(
+                geodesic['endpoint'], phiinv, geodesic['spacing'],
+            )
             if energy > optimization_tolerance * lowest_energy:
                 energy, geodesic['velocity_flow'][0] = lowest_energy, lowest_v0
                 local_step *= 0.5
