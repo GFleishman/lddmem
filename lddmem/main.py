@@ -36,7 +36,8 @@ def initialize_geodesic(
     geodesic = {}
     transform = np.copy(transform)
     if level > 0:
-        transform = gaussian_filter(transform, 2**level, axes=range(transform.ndim-1), mode='wrap')
+        sigma = np.max(transform_spacing) / transform_spacing * 2**(level-1)
+        transform = gaussian_filter(transform, sigma, axes=range(transform.ndim-1), mode='wrap')
         transform = zoom(transform, (1./2**level,)*3 + (1,), mode='grid-wrap')
     geodesic['endpoint'] = transform
 
@@ -173,7 +174,7 @@ def lddmem(
     initial_velocity :
     """
 
-    # TODO: IMPLEMENT MULTISCALE W.R.T. TIME DISCRETIZATION!
+    # TODO: IMPLEMENT MULTISCALE W.R.T. TIME
 
     # multiscale loop
     start_time = time.perf_counter()
