@@ -19,7 +19,7 @@ from os.path import abspath
 
 
 def initialize_geodesic(
-    level, transform, transform_spacing, v0, time_steps, regularizer, threads,
+    transform, transform_spacing, v0, space_scale, time_steps, regularizer, threads,
 ):
     """
     Determine the geodesic objects for a given scale level
@@ -35,18 +35,19 @@ def initialize_geodesic(
 
     geodesic = {}
     transform = np.copy(transform)
-    if level > 0:
-        sigma = np.max(transform_spacing) / transform_spacing * 2**(level-1)
+    if space_scale is not None:
+        sigma = tuple(space_scale / x for x in transform_spacing)
         transform = gaussian_filter(transform, sigma, axes=range(transform.ndim-1), mode='wrap')
-        transform = zoom(transform, (1./2**level,)*3 + (1,), mode='grid-wrap')
+        factors = tuple(min(1., 1/x) for x in sigma)
+        transform = zoom(transform, factors + (1,), mode='grid-wrap')
+        transform_spacing = 1./np.array(factors) * transform_spacing
     geodesic['endpoint'] = transform
+    geodesic['spacing'] = np.array(transform_spacing)
 
     geodesic['velocity_flow'] = np.zeros((time_steps,) + transform.shape)
     if v0 is not None:
-        zoom_factors = tuple(x/y for x, y in zip(transform.shape[:-1], v0.shape[:-1]))
-        geodesic['velocity_flow'][0] = zoom(v0, zoom_factors + (1,), mode='grid-wrap')
-
-    geodesic['spacing'] = np.array(transform_spacing) * 2**level
+        factors = tuple(x/y for x, y in zip(transform.shape[:-1], v0.shape[:-1]))
+        geodesic['velocity_flow'][0] = zoom(v0, factors + (1,), mode='grid-wrap')
     geodesic['position'] = epdiff.position_array(transform.shape[:-1], geodesic['spacing'])
 
     epdiff.initializeFFTW(transform.shape[:-1], threads)
@@ -56,10 +57,10 @@ def initialize_geodesic(
     return geodesic
 
 
-def forward_integration(geodesic, time_steps, compute_inverse):
+def forward_integration(geodesic, time_steps, endpoint_time, compute_inverse):
     """Integrate geodesic forward to construct inverse transform"""
 
-    dt = 1./(time_steps-1)
+    dt = endpoint_time/(time_steps-1)
     transform, inverse = 0, 0
     v = geodesic['velocity_flow']
     X, spacing = geodesic['position'], geodesic['spacing']
@@ -76,10 +77,10 @@ def forward_integration(geodesic, time_steps, compute_inverse):
 
 # TODO: jacobian of v is calculated in forward pass, can be saved
 #       offer user option between faster+more memory and slower+save memory
-def backward_integration(geodesic, residual, time_steps):
+def backward_integration(geodesic, residual, time_steps, endpoint_time):
     """Integrate adjoint system backward to get gradient at t0"""
 
-    dt = 1./(time_steps-1)
+    dt = endpoint_time/(time_steps-1)
     v, K = geodesic['velocity_flow'], geodesic['inverse_metric']
     spacing = geodesic['spacing']
     _v, _i = np.zeros_like(residual), residual
@@ -108,8 +109,8 @@ def compute_residual(transform, embedded_transform, spacing):
 def lddmem(
     transform,
     transform_spacing,
-    iterations,
-    time_steps=6,
+    multiscale_schedule,
+    endpoint_time=1.,
     regularizer=(12, 0, 1, 2),
     regularizer_balance=0.03,
     gradient_step=0.001,
@@ -118,6 +119,7 @@ def lddmem(
 ):
     """
     Embed a smooth deformable transform in the LDDMM framework
+    Optimization can be multiscale in both space and time.
 
     Parameters
     ----------
@@ -132,16 +134,32 @@ def lddmem(
         this should be two numbers, if your transform is a 3D vector field this shoud
         be three numbers.
 
-    iterations : tuple
-        The number of iterations to optimize at each scale. The optimization is multi-scale.
-        The length of this tuple indicates the number of scales you wish to use. Scales are
-        always a factor of two different along each axis. For example, if iterations==(100x50x25)
-        then optimization will run 100 iterations at 4x downsampling along each axis, then
-        50 iterations at 2x downsampling along each axis, then 25 iterations at full resolution.
+    multiscale_schedule : list of tuples, e.g. [(A1, B1, C1), (A2, B2, C2), ...]
+        The spatio-temporal multiscale optimization schedule. All tuples in list must
+        contain exactly three numbers in this format: (int, float, int). Using variables
+        from the example above, A is the number of iterations for that spatio-temporal scale
+        level. B is the desired isotropic voxel spacing in the same units as those used
+        in transform_spacing; if B is None then there is no spatial down sampling.
+        C is the number of time points along which the geodesic path is sampled.
+        For example: multiscale_schedule=[(100,2.0,3), (50,2.0,6), (20,None,6)]
+        will optimize for 100 iterations on a downsampled transform with 2.0 unit
+        spacing along all axes using 3 time points along the geodesic path (including
+        the initial and final time points). After, 50 iterations will run at the same
+        2.0 spatial sampling but with 6 time points along the geodesic. Finally, 20
+        iterations will run at full resolution with 6 time points along the geodesic.
+        A must always be greater than or equal to 1.
+        B will never result in up sampling. That is, if transform_spacing==(3., 1.,)
+        and B==2.0, then transform will be resampled to have spacing==(3., 2.,).
+        C must be greater than or equal to 3.
 
-    time_steps : int (default: 6)
-        The number of discrete time points at which the velocity flow integration is sampled.
-        The smallest acceptable value is 3.
+    endpoint_time : strictly positive float (default: 1.)
+        The integration is assumed to run from time point 0 to time point endpoint_time.
+        This is useful if you plan to combine initial velocities later with Simple
+        Geodesic Regression. For example if you had a time series of images collected
+        at 6 month intervals, then you would embed the T0 --> T6-months transform
+        with endpoint_time==1., then embed the T0 --> T12-months transform with
+        endpoint_time==2. That way, the initial velocities you get back are scaled
+        properly for Simple Geodesic Regression.
 
     regularizer : tuple of four numbers (default: (12, 0, 1, 2))
         The Riemannian metric used is A*divgrad + B*graddiv + C)**D
@@ -174,32 +192,33 @@ def lddmem(
     initial_velocity :
     """
 
-    # TODO: IMPLEMENT MULTISCALE W.R.T. TIME
-
-    # multiscale loop
+    # space multiscale loop
     start_time = time.perf_counter()
-    for level, local_iterations in enumerate(iterations):
+    local_step = gradient_step
+    for level, (iterations, space_scale, time_steps) in enumerate(multiscale_schedule):
 
-        # resample all fields for level
+        # resample all fields for space level
         geodesic = initialize_geodesic(
-            len(iterations)-level-1,
             transform,
             transform_spacing,
             geodesic['velocity_flow'][0] if level > 0 else None,
+            space_scale,
             time_steps,
             regularizer,
             threads,
         )
 
         # level specific loop
-        local_step = gradient_step
-        lowest_energy = np.finfo(np.float64).max
+        local_step = (gradient_step + local_step) / 2
+        lowest_energy = np.inf
         lowest_v0 = np.copy(geodesic['velocity_flow'][0])
-        for iteration in range(local_iterations):
+        for iii in range(iterations):
 
             # forward integrate and compute residual
-            compute_inverse = level == len(iterations)-1 and iteration == local_iterations-1
-            embedded_transform, inverse = forward_integration(geodesic, time_steps, compute_inverse)
+            compute_inverse = level == len(multiscale_schedule)-1 and iii == iterations-1
+            embedded_transform, inverse = forward_integration(
+                geodesic, time_steps, endpoint_time, compute_inverse,
+            )
             residual, energy, max_residual, mean_residual = compute_residual(
                 geodesic['endpoint'], embedded_transform, geodesic['spacing'],
             )
@@ -215,13 +234,15 @@ def lddmem(
                 if energy < lowest_energy:
                     lowest_energy = energy
                     lowest_v0 = np.copy(geodesic['velocity_flow'][0])
-                _v = backward_integration(geodesic, residual, time_steps)
+                _v = backward_integration(geodesic, residual, time_steps, endpoint_time)
                 gradient = geodesic['velocity_flow'][0] + (1./regularizer_balance**2) * _v
                 geodesic['velocity_flow'][0] += local_step * gradient
 
             # record progress
-            message = f'level-iteration: {level}-{iteration}    energy: {energy:.3f}    '+ \
-                      f'mean|max err: {mean_residual:.3f}|{max_residual:.3f}    '+\
+            message = f'scale-time_steps-iteration: ' + \
+                      f'{space_scale}-{time_steps}-{iii}    ' + \
+                      f'energy: {energy:.3f}    ' + \
+                      f'mean|max err: {mean_residual:.3f}|{max_residual:.3f}    ' + \
                       f'time: {time.perf_counter() - start_time:.3f}'
             print(message)
     return embedded_transform, inverse, geodesic['velocity_flow'][0]
