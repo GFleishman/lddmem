@@ -13,7 +13,6 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 
 
-#TODO: STILL NEED TO CHECK gu_pinv, initialize_metric_kernel
 
 
 ffter, iffter = None, None
@@ -49,6 +48,7 @@ def ifft(F, sh):
     return f
 
 
+#TODO: REVIEW THIS FUNCTION
 def gu_pinv(a, rcond=1e-15):
     """Return the pseudo-inverse of matrices at every voxel"""
 
@@ -65,6 +65,7 @@ def gu_pinv(a, rcond=1e-15):
                      np.transpose(u, swap))
 
 
+#TODO: REVIEW THIS FUNCTION
 def initialize_metric_kernel(a, b, c, d, sh, vox):
     """Precompute the metric kernel and inverse"""
 

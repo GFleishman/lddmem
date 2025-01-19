@@ -19,7 +19,8 @@ from os.path import abspath
 
 
 def initialize_geodesic(
-    transform, transform_spacing, v0, space_scale, time_steps, regularizer, threads,
+    transform, transform_spacing, v0, space_scale, time_steps, regularizer,
+    prioritize_speed, threads,
 ):
     """
     Determine the geodesic objects for a given scale level
@@ -50,6 +51,10 @@ def initialize_geodesic(
         geodesic['velocity_flow'][0] = zoom(v0, factors + (1,), mode='grid-wrap')
     geodesic['position'] = epdiff.position_array(transform.shape[:-1], geodesic['spacing'])
 
+    if prioritize_speed:
+        shape = (time_steps,) + transform.shape + (transform.shape[-1],)
+        geodesic['jacobian_flow'] = np.empty(shape)
+
     epdiff.initializeFFTW(transform.shape[:-1], threads)
     L, K = epdiff.initialize_metric_kernel(*regularizer, transform.shape[:-1], geodesic['spacing'])
     geodesic['metric'] = L
@@ -71,12 +76,13 @@ def forward_integration(geodesic, time_steps, endpoint_time, compute_inverse):
             jacobian = epdiff.jacobian(X+inverse, spacing)
             inverse -= dt * np.einsum('...ij,...j->...i', jacobian, v[i])
         m = epdiff.ifft(L * epdiff.fft(v[i]), v[i].shape)
-        v[i+1] = v[i] + dt * epdiff.adTranspose(v[i], m, K, spacing)
+        Dv = epdiff.jacobian(v[i], spacing)
+        if 'jacobian_flow' in geodesic.keys():
+            geodesic['jacobian_flow'][i] = Dv
+        v[i+1] = v[i] + dt * epdiff.adTranspose(v[i], m, K, spacing, Dv=Dv)
     return transform, inverse
 
 
-# TODO: jacobian of v is calculated in forward pass, can be saved
-#       offer user option between faster+more memory and slower+save memory
 def backward_integration(geodesic, residual, time_steps, endpoint_time):
     """Integrate adjoint system backward to get gradient at t0"""
 
@@ -85,7 +91,10 @@ def backward_integration(geodesic, residual, time_steps, endpoint_time):
     spacing = geodesic['spacing']
     _v, _i = np.zeros_like(residual), residual
     for i in range(1, time_steps)[::-1]:
-        Dv = epdiff.jacobian(v[i], spacing)
+        if 'jacobian_flow' in geodesic.keys() and i < time_steps-1:
+            Dv = geodesic['jacobian_flow'][i]
+        else:
+            Dv = epdiff.jacobian(v[i], spacing)
         D_v = epdiff.jacobian(_v, spacing)
         _v += dt * (_i - epdiff.ad(v[i], _v, spacing, Dv=Dv, Dm=D_v) + \
                     epdiff.adTranspose(_v, v[i], K, spacing, Dv=D_v, Dm=Dv))
@@ -115,6 +124,7 @@ def lddmem(
     regularizer_balance=0.03,
     gradient_step=0.001,
     optimization_tolerance=1.15,
+    prioritize_speed=False,
     threads=1,
 ):
     """
@@ -180,6 +190,10 @@ def lddmem(
         A multiplicative factor that determines how much the objective function is allowed to
         increase on any given iteration before the gradient_step is cut in half.
 
+    prioritize_speed : bool (default: False)
+        If true, Jacobian of velocity flow will be stored, preventing a redundant calculation
+        Jacobian of velocity flow is 3 times larger than the velocity flow.
+
     threads : int (default: 1)
         The number of threads that FFTW should use
 
@@ -205,6 +219,7 @@ def lddmem(
             space_scale,
             time_steps,
             regularizer,
+            prioritize_speed,
             threads,
         )
 
