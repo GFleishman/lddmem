@@ -13,7 +13,6 @@ from lddmem import epdiff, io
 from lddmem.cli import parse_command_line_arguments
 import time
 from scipy.ndimage import zoom, gaussian_filter
-import scipy.ndimage as ndi
 from os import makedirs
 from os.path import abspath
 
@@ -38,9 +37,9 @@ def initialize_geodesic(
     transform = np.copy(transform)
     if space_scale is not None:
         sigma = tuple(space_scale / x for x in transform_spacing)
-        transform = gaussian_filter(transform, sigma, axes=range(transform.ndim-1), mode='wrap')
+        transform = gaussian_filter(transform, sigma, axes=range(transform.ndim-1))
         factors = tuple(min(1., 1/x) for x in sigma)
-        transform = zoom(transform, factors + (1,), mode='grid-wrap')
+        transform = zoom(transform, factors + (1,), mode='nearest')
         transform_spacing = 1./np.array(factors) * transform_spacing
     geodesic['endpoint'] = transform
     geodesic['spacing'] = np.array(transform_spacing)
@@ -48,7 +47,7 @@ def initialize_geodesic(
     geodesic['velocity_flow'] = np.zeros((time_steps,) + transform.shape)
     if v0 is not None:
         factors = tuple(x/y for x, y in zip(transform.shape[:-1], v0.shape[:-1]))
-        geodesic['velocity_flow'][0] = zoom(v0, factors + (1,), mode='grid-wrap')
+        geodesic['velocity_flow'][0] = zoom(v0, factors + (1,), mode='nearest')
     geodesic['position'] = epdiff.position_array(transform.shape[:-1], geodesic['spacing'])
 
     if prioritize_speed:
@@ -62,6 +61,12 @@ def initialize_geodesic(
     return geodesic
 
 
+# TODO: STILL SCALING ISSUES TO WORK OUT
+#       WHEN INITIAL ENERGY IS HIGH, THE TOLERANCE CAN RESULT IN NEVER CUTTING THE STEP
+#       ALSO - SETTING REGULARIZER a=12 SCALLED ALL ERRORS DOWN CONSIDERABLY
+#       SO, SOMETHING IS AMPLIFYING THE MAGNITUDE OF THE VELOCITY AND THEREFORE TRANSFORM
+#       AS IT IS BEING INTEGRATED FORWARD IN TIME
+#       LOOK FOR WAYS TO CORRECT SCALING BALANCE
 def forward_integration(geodesic, time_steps, endpoint_time, compute_inverse):
     """Integrate geodesic forward to construct inverse transform"""
 
@@ -96,10 +101,11 @@ def backward_integration(geodesic, residual, time_steps, endpoint_time):
         else:
             Dv = epdiff.jacobian(v[i], spacing)
         D_v = epdiff.jacobian(_v, spacing)
-        _v += dt * (_i - epdiff.ad(v[i], _v, spacing, Dv=Dv, Dm=D_v) + \
+#        _v += dt * (epdiff.ifft(K * epdiff.fft(_i), _i.shape) + \
+        _v += dt * (_i + \
+                    epdiff.ad(v[i], _v, spacing, Dv=Dv, Dm=D_v) - \
                     epdiff.adTranspose(_v, v[i], K, spacing, Dv=D_v, Dm=Dv))
         _i += dt * epdiff.adTranspose(v[i], _i, K, spacing, Dv=Dv)
-    _v = epdiff.ifft(K * epdiff.fft(_v), _v.shape)
     return _v
 
 
@@ -121,9 +127,9 @@ def lddmem(
     multiscale_schedule,
     endpoint_time=1.,
     regularizer=(12, 0, 1, 2),
-    regularizer_balance=0.03,
-    gradient_step=0.001,
-    optimization_tolerance=1.15,
+    regularizer_balance=0.3,
+    gradient_step=0.1,
+    optimization_tolerance=1.1,
     prioritize_speed=False,
     threads=1,
 ):
@@ -227,6 +233,7 @@ def lddmem(
         local_step = (gradient_step + local_step) / 2
         lowest_energy = np.inf
         lowest_v0 = np.copy(geodesic['velocity_flow'][0])
+        lowest_gradient = np.zeros_like(lowest_v0)
         for iii in range(iterations):
 
             # forward integrate and compute residual
@@ -240,9 +247,9 @@ def lddmem(
 
             # if previous step was bad, reset
             if energy > optimization_tolerance * lowest_energy:
-                energy = lowest_energy
-                geodesic['velocity_flow'][0] = np.copy(lowest_v0)
                 local_step *= 0.5
+                energy = lowest_energy
+                geodesic['velocity_flow'][0] = lowest_v0 + local_step * lowest_gradient
 
             # otherwise, backward integrate and update initial velocity
             elif not compute_inverse:
@@ -250,8 +257,15 @@ def lddmem(
                     lowest_energy = energy
                     lowest_v0 = np.copy(geodesic['velocity_flow'][0])
                 _v = backward_integration(geodesic, residual, time_steps, endpoint_time)
-                gradient = geodesic['velocity_flow'][0] + (1./regularizer_balance**2) * _v
-                geodesic['velocity_flow'][0] += local_step * gradient
+                gradient = geodesic['velocity_flow'][0] - (1./regularizer_balance**2) * _v
+                geodesic['velocity_flow'][0] -= local_step * gradient
+                if energy < lowest_energy:
+                    lowest_gradient = gradient
+
+            # guarantee last iteration uses best result
+            if iii == iterations-2:
+                energy = lowest_energy
+                geodesic['velocity_flow'][0] = lowest_v0
 
             # record progress
             message = f'scale-time_steps-iteration: ' + \
@@ -260,6 +274,12 @@ def lddmem(
                       f'mean|max err: {mean_residual:.3f}|{max_residual:.3f}    ' + \
                       f'time: {time.perf_counter() - start_time:.3f}'
             print(message)
+
+    embedded_transform = zoom(embedded_transform, np.array(transform.shape) / embedded_transform.shape)
+    inverse = zoom(inverse, np.array(transform.shape) / inverse.shape)
+    x = zoom(geodesic['velocity_flow'][0], np.array(transform.shape) / geodesic['velocity_flow'][0].shape)
+    return embedded_transform, inverse, x
+
     return embedded_transform, inverse, geodesic['velocity_flow'][0]
 
 

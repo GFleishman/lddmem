@@ -56,9 +56,9 @@ ARGUMENTS = {
 'output_directory':'path to folder where all the amazing results will be written',
 '--endpoint_time':'geodesic is integrated to this time point value; default 1.0',
 '--regularizer':'AxBxCxD for metric (A*divgrad + B*graddiv + C)^D; default 12x0x1x2',
-'--regularizer_balance':'S in (1/S^2) * image-match + regularizer; default 0.03',
-'--gradient_step':'initial gradient descent step size; default 0.001',
-'--optimization_tolerance':'factor by which energy may *increase* between iterations; default 1.15',
+'--regularizer_balance':'S in (1/S^2) * image-match + regularizer; default 0.3',
+'--gradient_step':'initial gradient descent step size; default 0.1',
+'--optimization_tolerance':'factor by which energy may *increase* between iterations; default 1.1',
 '--threads':'number of threads FFTW should use; default 1',
 '--prioritize_speed':'including this flag will use more RAM but run a little faster',
 }
@@ -67,9 +67,9 @@ ARGUMENTS = {
 OPTIONS = {a:{'help':ARGUMENTS[a]} for a in ARGUMENTS.keys()}
 OPTIONS['--endpoint_time'] = {**OPTIONS['--endpoint_time'], 'default':'1.0'}
 OPTIONS['--regularizer'] = {**OPTIONS['--regularizer'], 'default':'12.0x0x1x2'}
-OPTIONS['--regularizer_balance'] = {**OPTIONS['--regularizer_balance'], 'default':'.03'}
-OPTIONS['--gradient_step'] = {**OPTIONS['--gradient_step'], 'default':'.001'}
-OPTIONS['--optimization_tolerance'] = {**OPTIONS['--optimization_tolerance'], 'default':'1.15'}
+OPTIONS['--regularizer_balance'] = {**OPTIONS['--regularizer_balance'], 'default':'.3'}
+OPTIONS['--gradient_step'] = {**OPTIONS['--gradient_step'], 'default':'.1'}
+OPTIONS['--optimization_tolerance'] = {**OPTIONS['--optimization_tolerance'], 'default':'1.1'}
 OPTIONS['--threads'] = {**OPTIONS['--threads'], 'default':'1'}
 OPTIONS['--prioritize_speed'] = {**OPTIONS['--prioritize_speed'], 'action':argparse.BooleanOptionalAction}
 

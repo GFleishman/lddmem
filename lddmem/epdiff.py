@@ -10,7 +10,7 @@ Began: May 2019
 
 import pyfftw
 import numpy as np
-from scipy.ndimage import map_coordinates
+from scipy.ndimage import map_coordinates, gaussian_filter
 
 
 
@@ -65,7 +65,6 @@ def gu_pinv(a, rcond=1e-15):
                      np.transpose(u, swap))
 
 
-#TODO: REVIEW THIS FUNCTION
 def initialize_metric_kernel(a, b, c, d, sh, vox):
     """Precompute the metric kernel and inverse"""
 
@@ -126,8 +125,10 @@ def initialize_metric_kernel(a, b, c, d, sh, vox):
 def jacobian(v, vox):
     """Return Jacobian field of vector field v"""
 
-    jac = np.gradient(v, *vox, axis=range(v.shape[-1]), edge_order=2)
-    jac = np.moveaxis(np.array(jac), 0, -1)
+    vox = np.array(vox)
+    jac = np.empty(v.shape + (v.shape[-1],), dtype=v.dtype)
+    for i in range(v.shape[-1]):
+        jac[..., i, :] = gaussian_filter(v, vox.min()/vox[i], 1, axes=i) / (2*vox[i])
     return np.ascontiguousarray(jac)
 
 
@@ -135,9 +136,10 @@ def divergence(v, vox, Dv=None):
     """Return the divergence of vector field v"""
 
     if Dv is None:
+        vox = np.array(vox)
         partials = np.empty_like(v)
         for i in range(v.shape[-1]):
-            partials[..., i] = np.gradient(v[..., i], vox[i], axis=i)
+             partials[..., i] = gaussian_filter(v[..., i], vox.min()/vox[i], 1, axes=i) / (2*vox[i])
         return np.sum(partials, axis=-1)
     else:
         return np.sum(np.diagonal(Dv, axis1=-2, axis2=-1), axis=-1)
@@ -154,7 +156,7 @@ def adTranspose(v, m, K, vox, Dv=None, Dm=None):
     adT = np.einsum('...ij,...j->...i', DvT, m)
     adT += np.einsum('...ij,...j->...i', Dm, v)
     adT += m * divv[..., np.newaxis]
-    return - ifft(K * fft(adT), v.shape)
+    return - ifft(K * fft(adT), adT.shape)
 
 
 def ad(v, m, vox, Dv=None, Dm=None):
@@ -181,9 +183,8 @@ def apply_transform(img, X, vox, order=1):
     if len(img.shape) == len(vox):
         img = img[..., np.newaxis]
     ret = np.empty(X.shape[:-1] + (img.shape[-1],))
-    X *= 1./vox
-    X = np.moveaxis(X, -1, 0)
+    X = np.moveaxis(X / vox, -1, 0)
     for i in range(img.shape[-1]):
-        ret[..., i] = map_coordinates(img[..., i], X, order=order, mode='grid-wrap')
+        ret[..., i] = map_coordinates(img[..., i], X, order=order, mode='reflect')
     return ret.squeeze()
 
