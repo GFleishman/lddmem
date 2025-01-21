@@ -48,6 +48,12 @@ def ifft(F, sh):
     return f
 
 
+def apply_kernel(F, K):
+    """Apply a metric kernel K to the function F"""
+
+    return ifft(K * fft(F), F.shape)
+
+
 #TODO: REVIEW THIS FUNCTION
 def gu_pinv(a, rcond=1e-15):
     """Return the pseudo-inverse of matrices at every voxel"""
@@ -145,7 +151,7 @@ def divergence(v, vox, Dv=None):
         return np.sum(np.diagonal(Dv, axis1=-2, axis2=-1), axis=-1)
 
 
-def adTranspose(v, m, K, vox, Dv=None, Dm=None):
+def adTranspose(v, m, vox, Dv=None, Dm=None):
     """Evaluate the transpose of the negative Jacobi-Lie bracket"""
 
     global ffter, iffter
@@ -155,8 +161,8 @@ def adTranspose(v, m, K, vox, Dv=None, Dm=None):
     DvT = np.moveaxis(Dv, -2, -1)
     adT = np.einsum('...ij,...j->...i', DvT, m)
     adT += np.einsum('...ij,...j->...i', Dm, v)
-    adT += m * divv[..., np.newaxis]
-    return - ifft(K * fft(adT), adT.shape)
+    adT += divv[..., np.newaxis] * m
+    return -adT
 
 
 def ad(v, m, vox, Dv=None, Dm=None):

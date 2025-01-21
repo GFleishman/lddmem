@@ -43,48 +43,55 @@ def initialize_geodesic(
         transform_spacing = 1./np.array(factors) * transform_spacing
     geodesic['endpoint'] = transform
     geodesic['spacing'] = np.array(transform_spacing)
-
-    geodesic['velocity_flow'] = np.zeros((time_steps,) + transform.shape)
-    if v0 is not None:
-        factors = tuple(x/y for x, y in zip(transform.shape[:-1], v0.shape[:-1]))
-        geodesic['velocity_flow'][0] = zoom(v0, factors + (1,), mode='nearest')
     geodesic['position'] = epdiff.position_array(transform.shape[:-1], geodesic['spacing'])
-
-    if prioritize_speed:
-        shape = (time_steps,) + transform.shape + (transform.shape[-1],)
-        geodesic['jacobian_flow'] = np.empty(shape)
 
     epdiff.initializeFFTW(transform.shape[:-1], threads)
     L, K = epdiff.initialize_metric_kernel(*regularizer, transform.shape[:-1], geodesic['spacing'])
     geodesic['metric'] = L
     geodesic['inverse_metric'] = K
+
+    geodesic['velocity_flow'] = np.zeros((time_steps,) + transform.shape)
+    geodesic['momentum_flow'] = np.zeros_like(geodesic['velocity_flow'])
+    if v0 is not None:
+        factors = tuple(x/y for x, y in zip(transform.shape[:-1], v0.shape[:-1]))
+        geodesic['velocity_flow'][0] = zoom(v0, factors + (1,), mode='nearest')
+        geodesic['momentum_flow'][0] = epdiff.apply_kernel(geodesic['velocity_flow'][0], L)
+
+    if prioritize_speed:
+        shape = (time_steps,) + transform.shape + (transform.shape[-1],)
+        geodesic['jacobian_velocity_flow'] = np.empty(shape)
+        geodesic['jacobian_momentum_flow'] = np.empty(shape)
     return geodesic
 
 
 # TODO: STILL SCALING ISSUES TO WORK OUT
 #       WHEN INITIAL ENERGY IS HIGH, THE TOLERANCE CAN RESULT IN NEVER CUTTING THE STEP
-#       ALSO - SETTING REGULARIZER a=12 SCALLED ALL ERRORS DOWN CONSIDERABLY
+#       ALSO - SETTING REGULARIZER a=1 SCALED ALL ERRORS DOWN CONSIDERABLY
 #       SO, SOMETHING IS AMPLIFYING THE MAGNITUDE OF THE VELOCITY AND THEREFORE TRANSFORM
 #       AS IT IS BEING INTEGRATED FORWARD IN TIME
 #       LOOK FOR WAYS TO CORRECT SCALING BALANCE
+#       ****FURTHER OBSERVATIONS SEEM TO INDICATE IT'S THE RESIDUAL SCALING THAT IS CAUSING
+#       PROBLEMS!****
 def forward_integration(geodesic, time_steps, endpoint_time, compute_inverse):
     """Integrate geodesic forward to construct inverse transform"""
 
-    dt = endpoint_time/(time_steps-1)
     transform, inverse = 0, 0
-    v = geodesic['velocity_flow']
-    X, spacing = geodesic['position'], geodesic['spacing']
+    dt = endpoint_time/(time_steps-1)
+    v, m = geodesic['velocity_flow'], geodesic['momentum_flow']
     L, K = geodesic['metric'], geodesic['inverse_metric']
+    X, spacing = geodesic['position'], geodesic['spacing']
     for i in range(time_steps-1):
         transform += dt * epdiff.apply_transform(v[i], X+transform, spacing)
         if compute_inverse:
             jacobian = epdiff.jacobian(X+inverse, spacing)
             inverse -= dt * np.einsum('...ij,...j->...i', jacobian, v[i])
-        m = epdiff.ifft(L * epdiff.fft(v[i]), v[i].shape)
         Dv = epdiff.jacobian(v[i], spacing)
-        if 'jacobian_flow' in geodesic.keys():
-            geodesic['jacobian_flow'][i] = Dv
-        v[i+1] = v[i] + dt * epdiff.adTranspose(v[i], m, K, spacing, Dv=Dv)
+        Dm = epdiff.jacobian(m[i], spacing)
+        if 'jacobian_velocity_flow' in geodesic.keys():
+            geodesic['jacobian_velocity_flow'][i] = Dv
+            geodesic['jacobian_momentum_flow'][i] = Dm
+        m[i+1] = m[i] + dt * epdiff.adTranspose(v[i], m[i], spacing, Dv=Dv, Dm=Dm)
+        v[i+1] = epdiff.apply_kernel(m[i+1], K)
     return transform, inverse
 
 
@@ -92,20 +99,21 @@ def backward_integration(geodesic, residual, time_steps, endpoint_time):
     """Integrate adjoint system backward to get gradient at t0"""
 
     dt = endpoint_time/(time_steps-1)
-    v, K = geodesic['velocity_flow'], geodesic['inverse_metric']
-    spacing = geodesic['spacing']
-    _v, _i = np.zeros_like(residual), residual
+    v, m = geodesic['velocity_flow'], geodesic['momentum_flow']
+    L, K = geodesic['metric'], geodesic['inverse_metric']
+    X, spacing = geodesic['position'], geodesic['spacing']
+    _v = residual
     for i in range(1, time_steps)[::-1]:
-        if 'jacobian_flow' in geodesic.keys() and i < time_steps-1:
-            Dv = geodesic['jacobian_flow'][i]
+        D_v = epdiff.jacobian(_v, spacing)
+        if 'jacobian_velocity_flow' in geodesic.keys() and i < time_steps-1:
+            Dv = geodesic['jacobian_velocity_flow'][i]
+            Dm = geodesic['jacobian_momentum_flow'][i]
         else:
             Dv = epdiff.jacobian(v[i], spacing)
-        D_v = epdiff.jacobian(_v, spacing)
-#        _v += dt * (epdiff.ifft(K * epdiff.fft(_i), _i.shape) + \
-        _v += dt * (_i + \
-                    epdiff.ad(v[i], _v, spacing, Dv=Dv, Dm=D_v) - \
-                    epdiff.adTranspose(_v, v[i], K, spacing, Dv=D_v, Dm=Dv))
-        _i += dt * epdiff.adTranspose(v[i], _i, K, spacing, Dv=Dv)
+            Dm = epdiff.jacobian(m[i], spacing)
+        ad = epdiff.ad(v[i], _v, spacing, Dv=Dv, Dm=D_v)
+        adT = epdiff.adTranspose(_v, m[i], spacing, Dv=D_v, Dm=Dm)
+        _v += dt * (ad - epdiff.apply_kernel(adT, K))
     return _v
 
 
@@ -117,7 +125,11 @@ def compute_residual(transform, embedded_transform, spacing):
     residual_magnitudes = np.sqrt(np.sum(energy, axis=-1))
     max_residual = residual_magnitudes.max()
     mean_residual = residual_magnitudes.mean()
-    residual *= spacing.min()/max_residual
+    if max_residual > spacing.min():  # ORIGINALLY NOT PRESENT, THEN LOWER BOUND WAS 0
+        # PROTECT AGAINST DIVIDE BY ZERO, BUT ALSO DON'T WANT TO ALLOW INSTABILITY
+        # WHICH CAN OCCUR IF WE HAVE RATIO OF TWO SMALL NUMBERS
+        # THINK ABOUT HOW TO PROTECT BUT ALSO HAVE PRODUCTIVE ITERATIONS
+        residual *= spacing.min()/max_residual  # TODO: QUESTIONABLE, NEEDS A LOT MORE TESTING
     return residual, np.sum(energy), max_residual, mean_residual
 
 
@@ -274,11 +286,6 @@ def lddmem(
                       f'mean|max err: {mean_residual:.3f}|{max_residual:.3f}    ' + \
                       f'time: {time.perf_counter() - start_time:.3f}'
             print(message)
-
-    embedded_transform = zoom(embedded_transform, np.array(transform.shape) / embedded_transform.shape)
-    inverse = zoom(inverse, np.array(transform.shape) / inverse.shape)
-    x = zoom(geodesic['velocity_flow'][0], np.array(transform.shape) / geodesic['velocity_flow'][0].shape)
-    return embedded_transform, inverse, x
 
     return embedded_transform, inverse, geodesic['velocity_flow'][0]
 
